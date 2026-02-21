@@ -1,4 +1,6 @@
-import type { OrderItem } from "@/lib/types";
+import type { OrderItem, Supplier } from "@/lib/types";
+
+const RESTAURANT_NAME = "ensue";
 
 type SupplierGroup = {
   supplier_id: number;
@@ -13,7 +15,19 @@ export function formatSupplierText(date: string, supplierName: string, items: Or
     return `- [${item.station_name}] ${item.item_name} ${item.quantity}${item.unit}${notePart}`;
   });
 
-  return [`【${date} 下货】${supplierName}`, ...lines].join("\n");
+  return [`【${RESTAURANT_NAME} ${date} 下货】${supplierName}`, ...lines].join("\n");
+}
+
+export function formatAllSuppliersText(date: string, groups: SupplierGroup[]) {
+  const blocks = groups.map((group) => {
+    const lines = group.items.map((item) => {
+      const notePart = item.note ? ` (${item.note})` : "";
+      return `- [${item.station_name}] ${item.item_name} ${item.quantity}${item.unit}${notePart}`;
+    });
+    return [`【${group.supplier_name}】`, ...lines].join("\n");
+  });
+
+  return [`【${RESTAURANT_NAME} ${date} 下货】全部供应商`, ...blocks].join("\n\n");
 }
 
 export function groupOrdersBySupplier(date: string, orders: OrderItem[]): SupplierGroup[] {
@@ -39,5 +53,16 @@ export function groupOrdersBySupplier(date: string, orders: OrderItem[]): Suppli
     group.formatted_text = formatSupplierText(date, group.supplier_name, group.items);
   }
 
-  return groups.sort((a, b) => a.supplier_name.localeCompare(b.supplier_name));
+  return groups;
+}
+
+export function sortGroupsBySuppliers(groups: SupplierGroup[], suppliers: Supplier[]) {
+  const orderMap = new Map<number, number>();
+  suppliers.forEach((s, index) => orderMap.set(s.id, index));
+
+  return [...groups].sort((a, b) => {
+    const ia = orderMap.get(a.supplier_id) ?? Number.MAX_SAFE_INTEGER;
+    const ib = orderMap.get(b.supplier_id) ?? Number.MAX_SAFE_INTEGER;
+    return ia - ib;
+  });
 }

@@ -69,12 +69,10 @@ const defaultSuppliers = [
 
 const syncSuppliers = db.transaction(() => {
   const upsert = db.prepare("INSERT INTO suppliers(name, is_active) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET is_active = 1");
-  const deactivateOthers = db.prepare(`UPDATE suppliers SET is_active = 0 WHERE name NOT IN (${defaultSuppliers.map(() => "?").join(",")})`);
 
   for (const name of defaultSuppliers) {
     upsert.run(name);
   }
-  deactivateOthers.run(...defaultSuppliers);
 });
 
 syncSuppliers();
@@ -85,6 +83,20 @@ export function getStations(): Station[] {
 
 export function getSuppliers(): Supplier[] {
   return db.prepare("SELECT id, name, is_active FROM suppliers WHERE is_active = 1 ORDER BY id ASC").all() as Supplier[];
+}
+
+export function addSupplier(name: string) {
+  const cleanName = name.trim();
+  if (!cleanName) {
+    return null;
+  }
+
+  db.prepare("INSERT INTO suppliers(name, is_active) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET is_active = 1")
+    .run(cleanName);
+
+  return db
+    .prepare("SELECT id, name, is_active FROM suppliers WHERE name = ? LIMIT 1")
+    .get(cleanName) as Supplier;
 }
 
 export function createOrderItem(payload: CreateOrderPayload) {

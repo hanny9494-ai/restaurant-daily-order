@@ -3,8 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getApiBaseUrl } from "@/lib/config";
-import { groupOrdersBySupplier } from "@/lib/format";
-import type { OrderItem } from "@/lib/types";
+import { formatAllSuppliersText, groupOrdersBySupplier, sortGroupsBySuppliers } from "@/lib/format";
+import type { OrderItem, Supplier } from "@/lib/types";
 
 const DASHBOARD_PIN_KEY = "dashboard_pin";
 
@@ -36,6 +36,8 @@ export default function DashboardPage() {
   const today = useMemo(() => todayString(), []);
 
   const [orders, setOrders] = useState<OrderItem[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [newSupplierName, setNewSupplierName] = useState("");
   const [pinReady, setPinReady] = useState(false);
   const [savedPin, setSavedPin] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -48,6 +50,12 @@ export default function DashboardPage() {
     setOrders(json.data || []);
   }
 
+  async function loadSuppliers() {
+    const res = await fetch(`${apiBase}/api/suppliers`);
+    const json = await res.json();
+    setSuppliers(json.data || []);
+  }
+
   useEffect(() => {
     const pin = localStorage.getItem(DASHBOARD_PIN_KEY) || "";
     setSavedPin(pin);
@@ -58,10 +66,13 @@ export default function DashboardPage() {
   useEffect(() => {
     if (pinReady && isUnlocked) {
       loadOrders();
+      loadSuppliers();
     }
   }, [pinReady, isUnlocked]);
 
-  const groups = useMemo(() => groupOrdersBySupplier(today, orders), [today, orders]);
+  const grouped = useMemo(() => groupOrdersBySupplier(today, orders), [today, orders]);
+  const groups = useMemo(() => sortGroupsBySuppliers(grouped, suppliers), [grouped, suppliers]);
+  const allFormattedText = useMemo(() => formatAllSuppliersText(today, groups), [today, groups]);
 
   function verifyPin() {
     if (!savedPin) {
@@ -98,6 +109,29 @@ export default function DashboardPage() {
     alert("PIN 已清除");
   }
 
+  async function createSupplier() {
+    const name = newSupplierName.trim();
+    if (!name) {
+      alert("请输入供应商名称");
+      return;
+    }
+
+    const res = await fetch(`${apiBase}/api/suppliers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name })
+    });
+
+    if (!res.ok) {
+      alert("新增供应商失败");
+      return;
+    }
+
+    setNewSupplierName("");
+    await loadSuppliers();
+    alert("供应商已新增");
+  }
+
   async function copyText(text: string) {
     if (navigator.clipboard && window.isSecureContext) {
       try {
@@ -117,7 +151,11 @@ export default function DashboardPage() {
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
         <h1>/dashboard 汇总端</h1>
         <div className="row">
-          {isUnlocked && <button className="btn secondary" onClick={loadOrders}>刷新</button>}
+          {isUnlocked && (
+            <button className="btn secondary" onClick={() => { loadOrders(); loadSuppliers(); }}>
+              刷新
+            </button>
+          )}
           <button className="btn secondary" type="button" onClick={() => router.push("/order")}>去下单端</button>
         </div>
       </div>
@@ -162,6 +200,19 @@ export default function DashboardPage() {
           </section>
 
           <section className="card">
+            <h2>供应商管理</h2>
+            <div className="row" style={{ marginTop: 8 }}>
+              <input
+                value={newSupplierName}
+                onChange={(e) => setNewSupplierName(e.target.value)}
+                placeholder="输入新供应商名称"
+                style={{ maxWidth: 280 }}
+              />
+              <button className="btn" type="button" onClick={createSupplier}>新建供应商</button>
+            </div>
+          </section>
+
+          <section className="card">
             <h2>今日全部订单</h2>
             <p className="muted">日期：{today}，共 {orders.length} 条</p>
           </section>
@@ -171,37 +222,48 @@ export default function DashboardPage() {
               <p className="muted">今天暂无订单。</p>
             </section>
           ) : (
-            groups.map((group) => (
-              <section className="card" key={group.supplier_id}>
+            <>
+              <section className="card">
                 <div className="row" style={{ justifyContent: "space-between" }}>
-                  <h3>{group.supplier_name}</h3>
-                  <button className="btn" onClick={() => copyText(group.formatted_text)}>复制文本</button>
+                  <h3>全部供应商</h3>
+                  <button className="btn" onClick={() => copyText(allFormattedText)}>复制全部文本</button>
                 </div>
 
-                <textarea readOnly value={group.formatted_text} />
-
-                <table className="table" style={{ marginTop: 10 }}>
-                  <thead>
-                    <tr>
-                      <th>Station</th>
-                      <th>Item</th>
-                      <th>Qty</th>
-                      <th>Note</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.items.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.station_name}</td>
-                        <td>{item.item_name}</td>
-                        <td>{item.quantity}{item.unit}</td>
-                        <td>{item.note || "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <textarea readOnly value={allFormattedText} />
               </section>
-            ))
+
+              {groups.map((group) => (
+                <section className="card" key={group.supplier_id}>
+                  <div className="row" style={{ justifyContent: "space-between" }}>
+                    <h3>{group.supplier_name}</h3>
+                    <button className="btn" onClick={() => copyText(group.formatted_text)}>复制文本</button>
+                  </div>
+
+                  <textarea readOnly value={group.formatted_text} />
+
+                  <table className="table" style={{ marginTop: 10 }}>
+                    <thead>
+                      <tr>
+                        <th>Station</th>
+                        <th>Item</th>
+                        <th>Qty</th>
+                        <th>Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.items.map((item) => (
+                        <tr key={item.id}>
+                          <td>{item.station_name}</td>
+                          <td>{item.item_name}</td>
+                          <td>{item.quantity}{item.unit}</td>
+                          <td>{item.note || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              ))}
+            </>
           )}
         </>
       )}
