@@ -13,6 +13,16 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     if (Array.isArray(body.items)) {
+      type BulkRow = {
+        date: string;
+        station_id: number;
+        supplier_id: number;
+        item_name: string;
+        quantity: string;
+        unit: string;
+        note: string;
+      };
+
       const rows = body.items
         .map((it: any) => ({
           date: it.date ? String(it.date) : todayString(),
@@ -22,14 +32,15 @@ export async function POST(request: NextRequest) {
           quantity: String(it.quantity || "").trim(),
           unit: String(it.unit || "").trim(),
           note: it.note ? String(it.note) : ""
-        }))
-        .filter((it) => it.station_id && it.supplier_id && it.item_name && it.quantity && it.unit);
+        })) as BulkRow[];
 
-      if (rows.length === 0) {
+      const validRows = rows.filter((it) => it.station_id && it.supplier_id && it.item_name && it.quantity && it.unit);
+
+      if (validRows.length === 0) {
         return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
       }
 
-      const ids = createOrderItemsBulk(rows);
+      const ids = createOrderItemsBulk(validRows);
       return NextResponse.json({ data: { ids } }, { status: 201 });
     }
 
