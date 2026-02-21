@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { addSupplier, getSuppliers } from "@/lib/db";
 
-export async function GET() {
-  return NextResponse.json({ data: getSuppliers() });
+export async function GET(request: NextRequest) {
+  const includeInactive = request.nextUrl.searchParams.get("include_inactive") === "1";
+  return NextResponse.json({ data: getSuppliers(includeInactive) });
 }
 
 export async function POST(request: NextRequest) {

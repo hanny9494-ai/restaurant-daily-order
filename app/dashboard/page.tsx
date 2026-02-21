@@ -51,7 +51,7 @@ export default function DashboardPage() {
   }
 
   async function loadSuppliers() {
-    const res = await fetch(`${apiBase}/api/suppliers`);
+    const res = await fetch(`${apiBase}/api/suppliers?include_inactive=1`);
     const json = await res.json();
     setSuppliers(json.data || []);
   }
@@ -132,6 +132,22 @@ export default function DashboardPage() {
     alert("供应商已新增");
   }
 
+  async function toggleSupplierStatus(id: number, nextActive: boolean) {
+    const res = await fetch(`${apiBase}/api/suppliers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_active: nextActive ? 1 : 0 })
+    });
+
+    if (!res.ok) {
+      alert("操作失败");
+      return;
+    }
+
+    await loadSuppliers();
+    alert(nextActive ? "已启用供应商" : "已停用供应商");
+  }
+
   async function copyText(text: string) {
     if (navigator.clipboard && window.isSecureContext) {
       try {
@@ -210,6 +226,42 @@ export default function DashboardPage() {
               />
               <button className="btn" type="button" onClick={createSupplier}>新建供应商</button>
             </div>
+            <table className="table" style={{ marginTop: 10 }}>
+              <thead>
+                <tr>
+                  <th>供应商</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {suppliers.map((supplier) => (
+                  <tr key={supplier.id}>
+                    <td>{supplier.name}</td>
+                    <td>{supplier.is_active ? "启用中" : "已停用"}</td>
+                    <td>
+                      {supplier.is_active ? (
+                        <button
+                          className="btn danger"
+                          type="button"
+                          onClick={() => toggleSupplierStatus(supplier.id, false)}
+                        >
+                          停用
+                        </button>
+                      ) : (
+                        <button
+                          className="btn secondary"
+                          type="button"
+                          onClick={() => toggleSupplierStatus(supplier.id, true)}
+                        >
+                          启用
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </section>
 
           <section className="card">

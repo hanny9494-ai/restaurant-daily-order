@@ -81,7 +81,10 @@ export function getStations(): Station[] {
   return db.prepare("SELECT id, name, is_active FROM stations WHERE is_active = 1 ORDER BY id ASC").all() as Station[];
 }
 
-export function getSuppliers(): Supplier[] {
+export function getSuppliers(includeInactive = false): Supplier[] {
+  if (includeInactive) {
+    return db.prepare("SELECT id, name, is_active FROM suppliers ORDER BY id ASC").all() as Supplier[];
+  }
   return db.prepare("SELECT id, name, is_active FROM suppliers WHERE is_active = 1 ORDER BY id ASC").all() as Supplier[];
 }
 
@@ -97,6 +100,11 @@ export function addSupplier(name: string) {
   return db
     .prepare("SELECT id, name, is_active FROM suppliers WHERE name = ? LIMIT 1")
     .get(cleanName) as Supplier;
+}
+
+export function setSupplierActive(id: number, isActive: number) {
+  db.prepare("UPDATE suppliers SET is_active = ? WHERE id = ?").run(isActive, id);
+  return db.prepare("SELECT id, name, is_active FROM suppliers WHERE id = ?").get(id) as Supplier | undefined;
 }
 
 export function createOrderItem(payload: CreateOrderPayload) {
