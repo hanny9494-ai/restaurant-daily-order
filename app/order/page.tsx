@@ -7,6 +7,22 @@ import type { OrderItem, Station, Supplier } from "@/lib/types";
 
 const units = ["克", "千克", "条", "个", "箱"];
 
+type DraftItem = {
+  itemName: string;
+  quantity: string;
+  unit: string;
+  note: string;
+};
+
+function createEmptyItem(): DraftItem {
+  return {
+    itemName: "",
+    quantity: "",
+    unit: units[0],
+    note: ""
+  };
+}
+
 function todayString() {
   const now = new Date();
   const yyyy = now.getFullYear();
@@ -25,10 +41,7 @@ export default function OrderPage() {
 
   const [stationId, setStationId] = useState<number | "">("");
   const [supplierId, setSupplierId] = useState<number | "">("");
-  const [itemName, setItemName] = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [unit, setUnit] = useState(units[0]);
-  const [note, setNote] = useState("");
+  const [items, setItems] = useState<DraftItem[]>([createEmptyItem()]);
   const [loading, setLoading] = useState(false);
 
   async function loadBasics() {
@@ -60,16 +73,47 @@ export default function OrderPage() {
     loadTodayOrders();
   }, []);
 
+  function updateItem(index: number, patch: Partial<DraftItem>) {
+    setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)));
+  }
+
+  function addItemRow() {
+    setItems((prev) => [...prev, createEmptyItem()]);
+  }
+
+  function removeItemRow(index: number) {
+    setItems((prev) => {
+      if (prev.length === 1) return prev;
+      return prev.filter((_, i) => i !== index);
+    });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!supplierId || !itemName || !quantity || !unit) {
-      alert("请填写完整信息");
+
+    const finalStationId = stationId || stations[0]?.id;
+    if (!finalStationId || !supplierId) {
+      alert("请先选择供应商");
       return;
     }
 
-    const finalStationId = stationId || stations[0]?.id;
-    if (!finalStationId) {
-      alert("暂无可用 station，请先配置");
+    const payloadItems = items
+      .map((it) => ({
+        item_name: it.itemName.trim(),
+        quantity: it.quantity.trim(),
+        unit: it.unit.trim(),
+        note: it.note.trim()
+      }))
+      .filter((it) => it.item_name || it.quantity || it.note);
+
+    if (payloadItems.length === 0) {
+      alert("请至少填写一条 item");
+      return;
+    }
+
+    const invalid = payloadItems.some((it) => !it.item_name || !it.quantity || !it.unit);
+    if (invalid) {
+      alert("每条 item 需要填写完整：名称、数量、单位");
       return;
     }
 
@@ -79,26 +123,26 @@ export default function OrderPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          date: today,
-          station_id: finalStationId,
-          supplier_id: supplierId,
-          item_name: itemName,
-          quantity,
-          unit,
-          note
+          items: payloadItems.map((it) => ({
+            date: today,
+            station_id: finalStationId,
+            supplier_id: supplierId,
+            item_name: it.item_name,
+            quantity: it.quantity,
+            unit: it.unit,
+            note: it.note
+          }))
         })
       });
 
       if (!res.ok) {
-        alert("提交失败");
+        alert("提交失败，请重试");
         return;
       }
 
-      setItemName("");
-      setQuantity("");
-      setNote("");
-      setUnit(units[0]);
+      setItems([createEmptyItem()]);
       await loadTodayOrders();
+      alert(`已提交 ${payloadItems.length} 条 item`);
     } finally {
       setLoading(false);
     }
@@ -137,37 +181,6 @@ export default function OrderPage() {
             </div>
 
             <div className="field" style={{ gridColumn: "1 / -1" }}>
-              <label>ITEM 名称</label>
-              <input value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="如 小白菜" />
-            </div>
-
-            <div className="field">
-              <label>数量</label>
-              <input value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="如 10" />
-            </div>
-
-            <div className="field">
-              <label>单位</label>
-              <div className="row">
-                {units.map((u) => (
-                  <button
-                    key={u}
-                    type="button"
-                    className={`unit-btn ${unit === u ? "active" : ""}`}
-                    onClick={() => setUnit(u)}
-                  >
-                    {u}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="field" style={{ gridColumn: "1 / -1" }}>
-              <label>备注（可选）</label>
-              <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选备注" />
-            </div>
-
-            <div className="field" style={{ gridColumn: "1 / -1" }}>
               <label>Station</label>
               <select value={stationId} onChange={(e) => setStationId(Number(e.target.value) || "") }>
                 {stations.map((s) => (
@@ -175,6 +188,65 @@ export default function OrderPage() {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <h3 style={{ marginBottom: 8 }}>Item 列表（同一供应商）</h3>
+            {items.map((item, idx) => (
+              <div key={idx} className="card" style={{ marginBottom: 8, padding: 12 }}>
+                <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+                  <strong>Item #{idx + 1}</strong>
+                  <button className="btn danger" type="button" onClick={() => removeItemRow(idx)}>删除此行</button>
+                </div>
+
+                <div className="grid">
+                  <div className="field" style={{ gridColumn: "1 / -1" }}>
+                    <label>ITEM 名称</label>
+                    <input
+                      value={item.itemName}
+                      onChange={(e) => updateItem(idx, { itemName: e.target.value })}
+                      placeholder="如 小白菜"
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label>数量</label>
+                    <input
+                      value={item.quantity}
+                      onChange={(e) => updateItem(idx, { quantity: e.target.value })}
+                      placeholder="如 10"
+                    />
+                  </div>
+
+                  <div className="field">
+                    <label>单位</label>
+                    <div className="row">
+                      {units.map((u) => (
+                        <button
+                          key={u}
+                          type="button"
+                          className={`unit-btn ${item.unit === u ? "active" : ""}`}
+                          onClick={() => updateItem(idx, { unit: u })}
+                        >
+                          {u}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field" style={{ gridColumn: "1 / -1" }}>
+                    <label>备注（可选）</label>
+                    <textarea
+                      value={item.note}
+                      onChange={(e) => updateItem(idx, { note: e.target.value })}
+                      placeholder="可选备注"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            <button className="btn secondary" type="button" onClick={addItemRow}>+ 新增一条 item</button>
           </div>
 
           <div className="row" style={{ marginTop: 12 }}>

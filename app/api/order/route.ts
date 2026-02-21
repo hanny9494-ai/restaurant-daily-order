@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createOrderItem, getOrderItemsByDate } from "@/lib/db";
+import { createOrderItem, createOrderItemsBulk, getOrderItemsByDate } from "@/lib/db";
 import { todayString } from "@/lib/date";
 
 export async function GET(request: NextRequest) {
@@ -11,6 +11,27 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
+    if (Array.isArray(body.items)) {
+      const rows = body.items
+        .map((it: any) => ({
+          date: it.date ? String(it.date) : todayString(),
+          station_id: Number(it.station_id),
+          supplier_id: Number(it.supplier_id),
+          item_name: String(it.item_name || "").trim(),
+          quantity: String(it.quantity || "").trim(),
+          unit: String(it.unit || "").trim(),
+          note: it.note ? String(it.note) : ""
+        }))
+        .filter((it) => it.station_id && it.supplier_id && it.item_name && it.quantity && it.unit);
+
+      if (rows.length === 0) {
+        return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+      }
+
+      const ids = createOrderItemsBulk(rows);
+      return NextResponse.json({ data: { ids } }, { status: 201 });
+    }
 
     const station_id = Number(body.station_id);
     const supplier_id = Number(body.supplier_id);

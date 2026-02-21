@@ -127,6 +127,33 @@ export function createOrderItem(payload: CreateOrderPayload) {
   return result.lastInsertRowid;
 }
 
+export function createOrderItemsBulk(payloads: CreateOrderPayload[]) {
+  const stmt = db.prepare(`
+    INSERT INTO order_items (
+      date, station_id, supplier_id, item_name, quantity, unit, note, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted')
+  `);
+
+  const insertMany = db.transaction((rows: CreateOrderPayload[]) => {
+    const ids: number[] = [];
+    for (const row of rows) {
+      const result = stmt.run(
+        row.date,
+        row.station_id,
+        row.supplier_id,
+        row.item_name.trim(),
+        row.quantity.trim(),
+        row.unit.trim(),
+        row.note?.trim() || null
+      );
+      ids.push(Number(result.lastInsertRowid));
+    }
+    return ids;
+  });
+
+  return insertMany(payloads);
+}
+
 export function getOrderItemsByDate(date: string): OrderItem[] {
   const stmt = db.prepare(`
     SELECT
