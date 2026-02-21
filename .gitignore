@@ -25,3 +25,4 @@ data/
 
 # Codex local metadata
 .codex/
+.vercel
