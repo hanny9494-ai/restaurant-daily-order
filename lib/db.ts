@@ -48,11 +48,16 @@ CREATE INDEX IF NOT EXISTS idx_order_items_date ON order_items(date);
 CREATE INDEX IF NOT EXISTS idx_order_items_supplier ON order_items(supplier_id);
 `);
 
-const stationCount = db.prepare("SELECT COUNT(*) as count FROM stations").get() as { count: number };
-if (stationCount.count === 0) {
-  const seed = db.prepare("INSERT INTO stations(name, is_active) VALUES (?, 1)");
-  ["Hot", "Cold", "Prep", "Pastry"].forEach((name) => seed.run(name));
-}
+const defaultStations = ["Hot", "Cold", "Prep", "Pastry", "Fish", "GM"];
+
+const syncStations = db.transaction(() => {
+  const upsert = db.prepare("INSERT INTO stations(name, is_active) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET is_active = 1");
+  for (const name of defaultStations) {
+    upsert.run(name);
+  }
+});
+
+syncStations();
 
 const defaultSuppliers = [
   "菜佬",

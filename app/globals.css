@@ -6,6 +6,17 @@ body {
   color: #111;
 }
 
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #111;
+  color: #fff;
+  padding: 10px 16px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .container {
   max-width: 900px;
   margin: 24px auto;

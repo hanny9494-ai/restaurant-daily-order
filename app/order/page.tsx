@@ -252,6 +252,7 @@ export default function OrderPage() {
           <div className="row" style={{ marginTop: 12 }}>
             <button className="btn" type="submit" disabled={loading}>{loading ? "提交中..." : "提交订单"}</button>
             <span className="muted">日期：{today}</span>
+            <span className="muted">系统按日期显示，00:00 自动切到新一天</span>
           </div>
         </form>
       </section>

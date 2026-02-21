@@ -139,6 +139,7 @@ export default function DashboardPage() {
           <section className="card">
             <h2>今日全部订单</h2>
             <p className="muted">日期：{today}，共 {orders.length} 条</p>
+            <p className="muted">系统按日期显示，00:00 自动切到新一天</p>
           </section>
 
           {groups.length === 0 ? (
