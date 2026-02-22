@@ -7,6 +7,7 @@
 4. 打开：
    - `http://localhost:3000/order`
    - `http://localhost:3000/dashboard`
+   - `http://localhost:3000/docs`
 
 ## 多端口预留
 - 默认前后端同端口。
