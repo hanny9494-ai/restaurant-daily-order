@@ -75,11 +75,31 @@ conda activate paddleocr`}
 
           <article id="session" className={styles.card}>
             <h2>AI 会话协议</h2>
+            <div className={styles.linkPanel}>
+              <p className={styles.linkTitle}>交接给 AI 的固定链接</p>
+              <a href="https://jeff-culinary-ai-docs.vercel.app/docs" target="_blank" rel="noreferrer">
+                https://jeff-culinary-ai-docs.vercel.app/docs
+              </a>
+              <a
+                href="https://github.com/hanny9494-ai/restaurant-daily-order/blob/main/handover/LIVE_CONTEXT.md"
+                target="_blank"
+                rel="noreferrer"
+              >
+                https://github.com/hanny9494-ai/restaurant-daily-order/blob/main/handover/LIVE_CONTEXT.md
+              </a>
+            </div>
             <pre className={`${styles.code} ${mono.className}`}>
 {`npm run status:session:start -- --goal "本次目标" --plan "执行计划"
 npm run status:session:end -- --summary "会话总结" --done "完成A|完成B" --pending "未完成A" --next "下一步A|下一步B"
 npm run status:check
 npm run status:push -- --message "chore(handover): session update"`}
+            </pre>
+            <pre className={`${styles.code} ${mono.className}`}>
+{`新对话请先阅读：
+1) handover/LIVE_CONTEXT.md
+2) handover/HANDOVER_COMPLETE_FRAMEWORK.md
+3) handover/TODO.md
+4) 当天 handover/daily/YYYY-MM-DD.md`}
             </pre>
             <p>规则：先读 Live Context，结束必须写 session 报告，并通过文档检查。</p>
           </article>
