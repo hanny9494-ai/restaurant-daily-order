@@ -8,7 +8,18 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p 3000"
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "status:daily": "node scripts/project-status.mjs daily",
+    "status:event": "node scripts/project-status.mjs event",
+    "status:todo:add": "node scripts/project-status.mjs todo-add",
+    "status:todo:done": "node scripts/project-status.mjs todo-done",
+    "status:session:start": "node scripts/project-status.mjs session-start",
+    "status:session:end": "node scripts/project-status.mjs session-end",
+    "status:check": "node scripts/handover-check.mjs",
+    "status:link": "node scripts/handover-link.mjs",
+    "status:push": "node scripts/project-sync.mjs",
+    "collect:food-reviews": "node scripts/food-review-collector.mjs",
+    "collect:youtube-transcripts": "python3 scripts/youtube_review_transcriber.py"
   },
   "dependencies": {
     "better-sqlite3": "^9.6.0",
