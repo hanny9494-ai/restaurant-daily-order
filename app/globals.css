@@ -93,6 +93,12 @@ textarea { min-height: 90px; }
   border-color: #f0b1b1;
 }
 
+.btn.danger-solid {
+  background: #d72626;
+  color: #fff;
+  border-color: #d72626;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -124,6 +130,42 @@ textarea { min-height: 90px; }
   border-color: #222;
   background: #222;
   color: #fff;
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 55vh;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  background: #fafafa;
+  margin: 12px 0;
+}
+
+.chat-item {
+  padding: 10px;
+  border-radius: 8px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.chat-item.user {
+  background: #eef6ff;
+  border: 1px solid #d5e9ff;
+}
+
+.chat-item.assistant {
+  background: #fff;
+  border: 1px solid #ececec;
+}
+
+.chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 @media (max-width: 768px) {

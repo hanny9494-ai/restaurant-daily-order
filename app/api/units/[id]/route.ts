@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { renameSupplier, setSupplierActive, softDeleteSupplier } from "@/lib/db";
+import { renameUnit, setUnitActive, softDeleteUnit } from "@/lib/db";
 
 export async function PATCH(
   request: NextRequest,
@@ -12,17 +12,19 @@ export async function PATCH(
 
   try {
     const body = await request.json();
-    if (typeof body.name === "string") {
-      const renamed = renameSupplier(id, body.name);
-      if (!renamed) {
+
+    const hasName = typeof body.name === "string";
+    let updated;
+    if (hasName) {
+      updated = renameUnit(id, String(body.name));
+      if (!updated) {
         return NextResponse.json({ error: "invalid name or not found" }, { status: 400 });
       }
-      return NextResponse.json({ data: renamed });
+      return NextResponse.json({ data: updated });
     }
 
     const isActive = body.is_active === 1 || body.is_active === true ? 1 : 0;
-
-    const updated = setSupplierActive(id, isActive);
+    updated = setUnitActive(id, isActive);
     if (!updated) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
@@ -42,7 +44,7 @@ export async function DELETE(
     return NextResponse.json({ error: "invalid id" }, { status: 400 });
   }
 
-  const deleted = softDeleteSupplier(id);
+  const deleted = softDeleteUnit(id);
   if (!deleted) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }

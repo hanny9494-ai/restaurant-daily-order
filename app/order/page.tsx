@@ -3,12 +3,26 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getApiBaseUrl } from "@/lib/config";
-import type { OrderItem, Station, Supplier } from "@/lib/types";
+import type { OrderItem, Station, Supplier, UnitOption } from "@/lib/types";
 
-const units = ["克", "千克", "条", "个", "箱"];
+const ORDER_DRAFT_KEY = "ensue_order_draft_v2";
+const ORDER_STAGED_KEY = "ensue_order_staged_v1";
 
 type DraftItem = {
   itemName: string;
+  quantity: string;
+  unit: string;
+  note: string;
+};
+
+type StagedLine = {
+  temp_id: string;
+  date: string;
+  station_id: number;
+  station_name: string;
+  supplier_id: number;
+  supplier_name: string;
+  item_name: string;
   quantity: string;
   unit: string;
   note: string;
@@ -18,7 +32,7 @@ function createEmptyItem(): DraftItem {
   return {
     itemName: "",
     quantity: "",
-    unit: units[0],
+    unit: "",
     note: ""
   };
 }
@@ -37,28 +51,44 @@ export default function OrderPage() {
 
   const [stations, setStations] = useState<Station[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [units, setUnits] = useState<UnitOption[]>([]);
   const [orders, setOrders] = useState<OrderItem[]>([]);
 
   const [stationId, setStationId] = useState<number | "">("");
   const [supplierId, setSupplierId] = useState<number | "">("");
   const [items, setItems] = useState<DraftItem[]>([createEmptyItem()]);
+  const [stagedLines, setStagedLines] = useState<StagedLine[]>([]);
   const [loading, setLoading] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
 
   async function loadBasics() {
-    const [stationsRes, suppliersRes] = await Promise.all([
+    const [stationsRes, suppliersRes, unitsRes] = await Promise.all([
       fetch(`${apiBase}/api/stations`),
-      fetch(`${apiBase}/api/suppliers`)
+      fetch(`${apiBase}/api/suppliers`),
+      fetch(`${apiBase}/api/units`)
     ]);
 
     const stationsJson = await stationsRes.json();
     const suppliersJson = await suppliersRes.json();
+    const unitsJson = await unitsRes.json();
 
     const stationData = stationsJson.data || [];
+    const unitData = unitsJson.data || [];
     setStations(stationData);
     setSuppliers(suppliersJson.data || []);
+    setUnits(unitData);
 
     if (stationData.length > 0) {
       setStationId(stationData[0].id);
+    }
+
+    if (unitData.length > 0) {
+      setItems((prev) =>
+        prev.map((row) => ({
+          ...row,
+          unit: row.unit || unitData[0].name
+        }))
+      );
     }
   }
 
@@ -73,12 +103,67 @@ export default function OrderPage() {
     loadTodayOrders();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const rawDraft = localStorage.getItem(ORDER_DRAFT_KEY);
+      if (rawDraft) {
+        const parsed = JSON.parse(rawDraft) as {
+          date: string;
+          stationId: number | "";
+          supplierId: number | "";
+          items: DraftItem[];
+        };
+
+        if (parsed && parsed.date === today) {
+          setStationId(parsed.stationId || "");
+          setSupplierId(parsed.supplierId || "");
+          if (Array.isArray(parsed.items) && parsed.items.length > 0) {
+            setItems(parsed.items);
+          }
+        }
+      }
+
+      const rawStaged = localStorage.getItem(ORDER_STAGED_KEY);
+      if (rawStaged) {
+        const parsed = JSON.parse(rawStaged) as { date: string; lines: StagedLine[] };
+        if (parsed && parsed.date === today && Array.isArray(parsed.lines)) {
+          setStagedLines(parsed.lines);
+        }
+      }
+    } catch {
+      // ignore malformed local data
+    } finally {
+      setDraftLoaded(true);
+    }
+  }, [today]);
+
+  useEffect(() => {
+    if (!draftLoaded || typeof window === "undefined") return;
+    localStorage.setItem(
+      ORDER_DRAFT_KEY,
+      JSON.stringify({
+        date: today,
+        stationId,
+        supplierId,
+        items
+      })
+    );
+  }, [draftLoaded, today, stationId, supplierId, items]);
+
+  useEffect(() => {
+    if (!draftLoaded || typeof window === "undefined") return;
+    localStorage.setItem(
+      ORDER_STAGED_KEY,
+      JSON.stringify({
+        date: today,
+        lines: stagedLines
+      })
+    );
+  }, [draftLoaded, today, stagedLines]);
+
   function updateItem(index: number, patch: Partial<DraftItem>) {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)));
-  }
-
-  function addItemRow() {
-    setItems((prev) => [...prev, createEmptyItem()]);
   }
 
   function removeItemRow(index: number) {
@@ -88,13 +173,20 @@ export default function OrderPage() {
     });
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-
+  function collectDraftItems() {
     const finalStationId = stationId || stations[0]?.id;
-    if (!finalStationId || !supplierId) {
-      alert("请先选择供应商");
-      return;
+    const finalSupplierId = supplierId;
+
+    if (!finalStationId || !finalSupplierId) {
+      alert("请先选择供应商和类别");
+      return null;
+    }
+
+    const station = stations.find((s) => s.id === finalStationId);
+    const supplier = suppliers.find((s) => s.id === finalSupplierId);
+    if (!station || !supplier) {
+      alert("供应商或类别无效");
+      return null;
     }
 
     const payloadItems = items
@@ -108,14 +200,63 @@ export default function OrderPage() {
 
     if (payloadItems.length === 0) {
       alert("请至少填写一条 item");
-      return;
+      return null;
     }
 
     const invalid = payloadItems.some((it) => !it.item_name || !it.quantity || !it.unit);
     if (invalid) {
       alert("每条 item 需要填写完整：名称、数量、单位");
+      return null;
+    }
+
+    return { finalStationId, finalSupplierId, stationName: station.name, supplierName: supplier.name, payloadItems };
+  }
+
+  function onStageOrder(e: FormEvent) {
+    e.preventDefault();
+
+    const payload = collectDraftItems();
+    if (!payload) return;
+
+    const lines: StagedLine[] = payload.payloadItems.map((it, idx) => ({
+      temp_id: `${Date.now()}_${idx}_${Math.random().toString(16).slice(2)}`,
+      date: today,
+      station_id: payload.finalStationId,
+      station_name: payload.stationName,
+      supplier_id: payload.finalSupplierId,
+      supplier_name: payload.supplierName,
+      item_name: it.item_name,
+      quantity: it.quantity,
+      unit: it.unit,
+      note: it.note
+    }));
+
+    setStagedLines((prev) => [...prev, ...lines]);
+    setItems([{ ...createEmptyItem(), unit: units[0]?.name || "" }]);
+    alert(`已暂存 ${lines.length} 条，检查无误后再点“提交订单”`);
+  }
+
+  function removeStagedLine(tempId: string) {
+    setStagedLines((prev) => prev.filter((l) => l.temp_id !== tempId));
+  }
+
+  function clearStagedLines() {
+    const ok = confirm("确认清空待提交订单？");
+    if (!ok) return;
+    setStagedLines([]);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(ORDER_STAGED_KEY);
+    }
+  }
+
+  async function submitStagedOrders() {
+    if (stagedLines.length === 0) {
+      alert("当前没有待提交订单");
       return;
     }
+
+    const ok = confirm("确定单已下齐了吗叼毛？");
+    if (!ok) return;
 
     setLoading(true);
     try {
@@ -123,10 +264,10 @@ export default function OrderPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          items: payloadItems.map((it) => ({
-            date: today,
-            station_id: finalStationId,
-            supplier_id: supplierId,
+          items: stagedLines.map((it) => ({
+            date: it.date,
+            station_id: it.station_id,
+            supplier_id: it.supplier_id,
             item_name: it.item_name,
             quantity: it.quantity,
             unit: it.unit,
@@ -140,9 +281,12 @@ export default function OrderPage() {
         return;
       }
 
-      setItems([createEmptyItem()]);
+      setStagedLines([]);
+      if (typeof window !== "undefined") {
+        localStorage.removeItem(ORDER_STAGED_KEY);
+      }
       await loadTodayOrders();
-      alert(`已提交 ${payloadItems.length} 条 item`);
+      alert(`提交成功，共 ${stagedLines.length} 条`);
     } finally {
       setLoading(false);
     }
@@ -160,6 +304,21 @@ export default function OrderPage() {
     await loadTodayOrders();
   }
 
+  const stagedGroups = useMemo(() => {
+    const map = new Map<string, { title: string; lines: StagedLine[] }>();
+    for (const line of stagedLines) {
+      const key = `${line.supplier_id}::${line.station_id}`;
+      const title = `${line.supplier_name} / ${line.station_name}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.lines.push(line);
+      } else {
+        map.set(key, { title, lines: [line] });
+      }
+    }
+    return Array.from(map.values());
+  }, [stagedLines]);
+
   return (
     <main className="container">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
@@ -168,7 +327,7 @@ export default function OrderPage() {
       </div>
 
       <section className="card">
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onStageOrder}>
           <div className="grid">
             <div className="field" style={{ gridColumn: "1 / -1" }}>
               <label>供应商</label>
@@ -181,7 +340,7 @@ export default function OrderPage() {
             </div>
 
             <div className="field" style={{ gridColumn: "1 / -1" }}>
-              <label>Station</label>
+              <label>类别（Station）</label>
               <select value={stationId} onChange={(e) => setStationId(Number(e.target.value) || "") }>
                 {stations.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
@@ -191,7 +350,7 @@ export default function OrderPage() {
           </div>
 
           <div style={{ marginTop: 12 }}>
-            <h3 style={{ marginBottom: 8 }}>Item 列表（同一供应商）</h3>
+            <h3 style={{ marginBottom: 8 }}>填写条目（先暂存）</h3>
             {items.map((item, idx) => (
               <div key={idx} className="card" style={{ marginBottom: 8, padding: 12 }}>
                 <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
@@ -223,12 +382,12 @@ export default function OrderPage() {
                     <div className="row">
                       {units.map((u) => (
                         <button
-                          key={u}
+                          key={u.id}
                           type="button"
-                          className={`unit-btn ${item.unit === u ? "active" : ""}`}
-                          onClick={() => updateItem(idx, { unit: u })}
+                          className={`unit-btn ${item.unit === u.name ? "active" : ""}`}
+                          onClick={() => updateItem(idx, { unit: u.name })}
                         >
-                          {u}
+                          {u.name}
                         </button>
                       ))}
                     </div>
@@ -246,15 +405,61 @@ export default function OrderPage() {
               </div>
             ))}
 
-            <button className="btn secondary" type="button" onClick={addItemRow}>+ 新增一条 item</button>
+            <button className="btn secondary" type="button" onClick={() => {
+              setItems((prev) => [...prev, { ...createEmptyItem(), unit: units[0]?.name || "" }]);
+            }}>+ 新增一条 item</button>
           </div>
 
           <div className="row" style={{ marginTop: 12 }}>
-            <button className="btn" type="submit" disabled={loading}>{loading ? "提交中..." : "提交订单"}</button>
+            <button className="btn" type="submit" disabled={loading}>{loading ? "处理中..." : "先下单（暂存）"}</button>
             <span className="muted">日期：{today}</span>
             <span className="muted">系统按日期显示，00:00 自动切到新一天</span>
           </div>
         </form>
+      </section>
+
+      <section className="card">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h2>待提交订单（本机暂存）</h2>
+          <div className="row">
+            <button className="btn danger" type="button" onClick={clearStagedLines}>清空暂存</button>
+            <button className="btn danger-solid" type="button" onClick={submitStagedOrders} disabled={loading || stagedLines.length === 0}>
+              {loading ? "提交中..." : "提交订单"}
+            </button>
+          </div>
+        </div>
+        <p className="muted">退出后再次进入，今日暂存内容会保留在本设备。</p>
+        {stagedGroups.length === 0 ? (
+          <p className="muted">当前没有暂存订单。</p>
+        ) : (
+          stagedGroups.map((group, groupIndex) => (
+            <div key={groupIndex} className="card" style={{ padding: 12 }}>
+              <h3>{group.title}</h3>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Qty</th>
+                    <th>Note</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.lines.map((line) => (
+                    <tr key={line.temp_id}>
+                      <td>{line.item_name}</td>
+                      <td>{line.quantity}{line.unit}</td>
+                      <td>{line.note || "-"}</td>
+                      <td>
+                        <button className="btn danger" type="button" onClick={() => removeStagedLine(line.temp_id)}>删除</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))
+        )}
       </section>
 
       <section className="card">

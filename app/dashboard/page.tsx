@@ -41,6 +41,9 @@ export default function DashboardPage() {
   const [savedPin, setSavedPin] = useState("");
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
+  const [exportDate, setExportDate] = useState(today);
+  const [exportStart, setExportStart] = useState(today);
+  const [exportEnd, setExportEnd] = useState(today);
 
   async function loadOrders() {
     const res = await fetch(`${apiBase}/api/order?date=${today}`);
@@ -101,6 +104,17 @@ export default function DashboardPage() {
     alert(copied ? "已复制" : "复制失败，请手动长按文本复制");
   }
 
+  function downloadByDate() {
+    window.open(`${apiBase}/api/order/export?date=${encodeURIComponent(exportDate)}`, "_blank");
+  }
+
+  function downloadByRange() {
+    window.open(
+      `${apiBase}/api/order/export?start=${encodeURIComponent(exportStart)}&end=${encodeURIComponent(exportEnd)}`,
+      "_blank"
+    );
+  }
+
   return (
     <main className="container">
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
@@ -112,6 +126,7 @@ export default function DashboardPage() {
             </button>
           )}
           <button className="btn secondary" type="button" onClick={() => router.push("/dashboard/manage")}>管理设置</button>
+          <button className="btn secondary" type="button" onClick={() => router.push("/receiving")}>收货端</button>
           <button className="btn secondary" type="button" onClick={() => router.push("/order")}>去下单端</button>
         </div>
       </div>
@@ -142,6 +157,19 @@ export default function DashboardPage() {
             <p className="muted">系统按日期显示，00:00 自动切到新一天</p>
           </section>
 
+          <section className="card">
+            <h2>Excel 下载</h2>
+            <div className="row" style={{ marginTop: 8 }}>
+              <input type="date" value={exportDate} onChange={(e) => setExportDate(e.target.value)} style={{ maxWidth: 180 }} />
+              <button className="btn" type="button" onClick={downloadByDate}>下载单日</button>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <input type="date" value={exportStart} onChange={(e) => setExportStart(e.target.value)} style={{ maxWidth: 180 }} />
+              <input type="date" value={exportEnd} onChange={(e) => setExportEnd(e.target.value)} style={{ maxWidth: 180 }} />
+              <button className="btn" type="button" onClick={downloadByRange}>下载日期范围</button>
+            </div>
+          </section>
+
           {groups.length === 0 ? (
             <section className="card">
               <p className="muted">今天暂无订单。</p>
@@ -169,19 +197,19 @@ export default function DashboardPage() {
                   <table className="table" style={{ marginTop: 10 }}>
                     <thead>
                       <tr>
-                        <th>Station</th>
                         <th>Item</th>
                         <th>Qty</th>
+                        <th>Station</th>
                         <th>Note</th>
                       </tr>
                     </thead>
                     <tbody>
                       {group.items.map((item) => (
-                        <tr key={item.id}>
-                          <td>{item.station_name}</td>
+                        <tr key={`${group.supplier_id}-${item.item_name}-${item.unit}`}>
                           <td>{item.item_name}</td>
-                          <td>{item.quantity}{item.unit}</td>
-                          <td>{item.note || "-"}</td>
+                          <td>{item.total_quantity}{item.unit}</td>
+                          <td>{item.station_names.join("/")}</td>
+                          <td>{item.notes.join("; ") || "-"}</td>
                         </tr>
                       ))}
                     </tbody>

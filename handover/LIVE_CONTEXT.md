@@ -2,13 +2,15 @@
 
 这个文件是“新会话唯一入口链接”。任何 AI 新对话都先阅读本页。
 
-- 今日日期：2026-02-22
-- 今日 handover：[daily/2026-02-22.md](./daily/2026-02-22.md)
+- 今日日期：2026-02-26
+- 今日 handover：[daily/2026-02-26.md](./daily/2026-02-26.md)
 - 长期状态：`./PROJECT_STATUS.md`
 - 待办清单：`./TODO.md`
 - 变更日志：`./CHANGELOG.md`
 
 ## 最新会话记录（最近 5 条）
+- [2026-02-26_233733_end.md](./sessions/2026-02-26_233733_end.md)
+- [2026-02-22_221918_dify_api_deploy_handover.md](./sessions/2026-02-22_221918_dify_api_deploy_handover.md)
 - [2026-02-22_111651_start.md](./sessions/2026-02-22_111651_start.md)
 - [2026-02-22_111651_end.md](./sessions/2026-02-22_111651_end.md)
 - [2026-02-22_1116.md](./sessions/2026-02-22_1116.md)
