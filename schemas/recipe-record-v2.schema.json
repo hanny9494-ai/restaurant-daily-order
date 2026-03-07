@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jify.local/schema/recipe-record-v2.json",
+  "title": "RecipeRecordV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["meta", "production", "allergens", "ingredients", "steps"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dish_code", "dish_name", "recipe_type", "menu_cycle", "plating_image_url"],
+      "properties": {
+        "dish_code": { "type": "string", "minLength": 1 },
+        "dish_name": { "type": "string", "minLength": 1 },
+        "recipe_type": { "type": "string", "enum": ["MENU", "BACKBONE"] },
+        "menu_cycle": { "type": ["string", "null"] },
+        "plating_image_url": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "recipe_type": { "const": "MENU" } }, "required": ["recipe_type"] },
+          "then": { "properties": { "menu_cycle": { "type": "string", "minLength": 1 } } }
+        },
+        {
+          "if": { "properties": { "recipe_type": { "const": "BACKBONE" } }, "required": ["recipe_type"] },
+          "then": { "properties": { "menu_cycle": { "type": "null" } } }
+        }
+      ]
+    },
+    "production": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["servings", "net_yield_rate", "key_temperature_points"],
+      "properties": {
+        "servings": { "type": "string" },
+        "net_yield_rate": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "key_temperature_points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step", "temp_c", "hold_sec"],
+            "properties": {
+              "step": { "type": "string" },
+              "temp_c": { "type": "number" },
+              "hold_sec": { "type": "number" },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "allergens": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "ingredients": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "quantity", "unit"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "quantity": { "type": "string", "minLength": 1 },
+          "unit": { "type": "string", "minLength": 1 },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_no", "action", "time_sec"],
+        "properties": {
+          "step_no": { "type": "integer", "minimum": 1 },
+          "action": { "type": "string", "minLength": 1 },
+          "time_sec": { "type": "number", "minimum": 0 },
+          "temp_c": { "type": "number" },
+          "ccp": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

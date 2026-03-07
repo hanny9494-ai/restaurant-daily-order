@@ -173,3 +173,164 @@ textarea { min-height: 90px; }
     grid-template-columns: 1fr;
   }
 }
+
+/* v2.4 UI skin (from provided design language) */
+.ui24-body {
+  min-height: 100vh;
+  background: #1a1a1a;
+  color: #fff;
+}
+
+.ui24-wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 20px 16px 96px;
+}
+
+.ui24-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 1px solid #333;
+  background: rgba(26, 26, 26, 0.95);
+  backdrop-filter: blur(10px);
+}
+
+.ui24-topbar-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  height: 56px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ui24-brand {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ui24-muted {
+  color: #999;
+}
+
+.ui24-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ui24-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ui24-card {
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.ui24-card-press:hover {
+  border-color: #4a4a4a;
+  background: #2b2b2b;
+}
+
+.ui24-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.ui24-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  background: #f59e0b;
+  color: #111;
+  text-decoration: none;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ui24-btn:hover {
+  background: #d97706;
+  border-color: #d97706;
+}
+
+.ui24-btn-ghost {
+  border-color: #555;
+  background: transparent;
+  color: #fff;
+}
+
+.ui24-btn-ghost:hover {
+  background: #2d2d2d;
+  border-color: #777;
+}
+
+.ui24-input,
+.ui24-select,
+.ui24-textarea {
+  width: 100%;
+  border: 1px solid #444;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #1f1f1f;
+  color: #fff;
+}
+
+.ui24-textarea {
+  min-height: 110px;
+}
+
+.ui24-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #999;
+  font-size: 13px;
+}
+
+.ui24-dropzone {
+  border: 2px dashed #555;
+  border-radius: 12px;
+  padding: 16px;
+  background: #202020;
+}
+
+.ui24-dropzone-active {
+  border-color: #f59e0b;
+  background: #2a2418;
+}
+
+.ui24-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ui24-table th,
+.ui24-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #353535;
+  text-align: left;
+  font-size: 14px;
+  color: #e5e5e5;
+}
+
+.ui24-table th {
+  color: #aaa;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .ui24-grid-2,
+  .ui24-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}

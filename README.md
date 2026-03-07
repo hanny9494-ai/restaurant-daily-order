@@ -14,12 +14,57 @@
 - 可通过 `NEXT_PUBLIC_API_BASE_URL` 指向独立 API 服务（如 `http://localhost:3001`）。
 - 预留端口配置在 `lib/config.ts`。
 
+## Qwen API Key 配置（必须）
+1. 本地开发
+   - 复制模板：`cp .env.example .env.local`
+   - 在 `.env.local` 中填写真实 key（推荐字段：`DASHSCOPE_API_KEY`）
+2. Vercel 预览/线上
+   - 添加变量：`vercel env add DASHSCOPE_API_KEY`
+   - 重新部署：`vercel --yes`
+
+支持任一变量名：`DASHSCOPE_API_KEY`、`DASHSCOPE_APIKEY`、`QWEN_API_KEY`。
+
 ## API
 - `POST /api/order`
 - `GET /api/order?date=YYYY-MM-DD`
 - `DELETE /api/order/:id`
 - `GET /api/stations`
 - `GET /api/suppliers`
+
+### 食谱系统 API（新增）
+- `GET /api/recipe-users`
+- `GET /api/recipes`
+- `POST /api/recipes`
+- `GET /api/recipes/:id`
+- `POST /api/recipes/:id/revision`
+- `PATCH /api/recipes/versions/:versionId`
+- `POST /api/recipes/versions/:versionId/submit`
+- `POST /api/recipes/versions/:versionId/review`
+- `POST /api/recipes/versions/:versionId/publish`
+- `GET /api/recipes/approvals`
+
+### bangwagong 对接（新增）
+发布食谱版本时会尝试 webhook 同步到 bangwagong。请在环境变量中配置：
+- `BANGWAGONG_WEBHOOK_URL`：你的 bangwagong webhook 地址
+- `BANGWAGONG_API_TOKEN`：可选，Bearer Token
+
+前端入口：
+- `http://localhost:3000/recipes`
+- `http://localhost:3000/recipes/approvals`
+
+食谱分类模型：
+- `BACKBONE`：基础母配方（跨菜单长期复用）
+- `MENU`：季度菜单食谱（创建时建议填写 `menu_cycle`，如 `2026Q2`）
+
+食谱 JSON（v2 固定结构，查看/修改页可编辑）：
+- `meta`：`dish_code`、`dish_name`、`recipe_type`、`menu_cycle`、`plating_image_url`
+- `production`：`servings`、`net_yield_rate`（0~1） 、`key_temperature_points[]`
+- `allergens`：数组
+- `ingredients[]`：`name`、`quantity`、`unit`、`note`
+- `steps[]`：`step_no`、`action`、`time_sec`、`temp_c`、`ccp`、`note`
+
+提交审批前会做必填校验（字段缺失会阻止提交）。
+Schema 文件：`schemas/recipe-record-v2.schema.json`（与页面/后端校验对齐）。
 
 ## 数据库
 SQLite 文件：`data/app.db`
