@@ -1,19 +1,9 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import Database from "better-sqlite3";
+import { resolveDataFile } from "@/lib/data-paths";
 
 export type KnowledgeLayer = "L1" | "L2" | "L3" | "L4" | "L5";
 
-const runtimeDbBase = process.env.VERCEL ? os.tmpdir() : process.cwd();
-const dbDir = path.join(runtimeDbBase, "data");
-const dbPath = path.join(dbDir, "l0_engine.db");
-
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const db = new Database(dbPath);
+const db = new Database(resolveDataFile(process.env.L0_DB_FILE || "l0_engine.db"));
 db.pragma("journal_mode = WAL");
 
 db.exec(`

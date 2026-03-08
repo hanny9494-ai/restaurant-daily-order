@@ -171,6 +171,325 @@ function buildReviewReasons(recipes: any[], detectedComponentsCount: number, aiP
   return reviewReasons;
 }
 
+const ALLERGEN_RULES: Array<{ code: string; tokens: string[] }> = [
+  { code: "GLUTEN", tokens: ["flour", "bread", "brioche", "pasta", "noodle", "crumb", "crouton", "wheat"] },
+  { code: "WHEAT", tokens: ["wheat", "flour", "bread", "brioche"] },
+  { code: "CRUSTACEAN_SHELLFISH", tokens: ["lobster", "shrimp", "prawn", "crab", "langoustine", "crayfish"] },
+  { code: "MOLLUSK", tokens: ["scallop", "clam", "mussel", "oyster", "abalone", "octopus", "squid"] },
+  { code: "FISH", tokens: ["fish", "bonito", "anchovy", "sardine", "salmon", "tuna", "cod", "mackerel"] },
+  { code: "EGG", tokens: ["egg", "yolk", "albumen", "meringue", "mayo"] },
+  { code: "MILK_DAIRY", tokens: ["milk", "butter", "cream", "cheese", "crème", "yogurt"] },
+  { code: "PEANUT", tokens: ["peanut"] },
+  { code: "TREE_NUT", tokens: ["almond", "hazelnut", "walnut", "pecan", "pistachio", "cashew", "macadamia"] },
+  { code: "SOY", tokens: ["soy", "shoyu", "miso", "tofu", "edamame", "tamari"] },
+  { code: "SESAME", tokens: ["sesame", "tahini"] },
+  { code: "MUSTARD", tokens: ["mustard"] },
+  { code: "CELERY", tokens: ["celery"] },
+  { code: "SULFITE", tokens: ["wine", "vermouth", "sherry", "madeira", "port"] }
+];
+
+function inferRecipeDietAndAllergens(recipe: any) {
+  const ingredientText = Array.isArray(recipe?.ingredients)
+    ? recipe.ingredients.map((item: any) => `${item?.name || ""} ${item?.note || ""}`.toLowerCase()).join(" | ")
+    : "";
+  const stepText = Array.isArray(recipe?.steps)
+    ? recipe.steps.map((item: any) => `${item?.action || ""} ${item?.note || ""}`.toLowerCase()).join(" | ")
+    : "";
+  const nameText = String(recipe?.meta?.dish_name || "").toLowerCase();
+  const text = [nameText, ingredientText, stepText].join(" | ");
+
+  const inferredAllergens = new Set<string>(Array.isArray(recipe?.allergens) ? recipe.allergens.map((x: any) => String(x)) : []);
+  for (const rule of ALLERGEN_RULES) {
+    if (rule.tokens.some((token) => text.includes(token))) {
+      inferredAllergens.add(rule.code);
+    }
+  }
+
+  const hasShellfish = ["CRUSTACEAN_SHELLFISH", "MOLLUSK"].some((code) => inferredAllergens.has(code));
+  const hasFish = inferredAllergens.has("FISH");
+  const hasEgg = inferredAllergens.has("EGG") || /\begg\b|\byolk\b|\bmeringue\b/.test(text);
+  const hasDairy = inferredAllergens.has("MILK_DAIRY");
+  const hasMeat = /\bbeef\b|\bpork\b|\blamb\b|\bveal\b|\bduck\b|\bchicken\b|\bsquab\b|\bturkey\b|\bfoie gras\b|\bham\b|\bbacon\b|\bsausage\b/.test(text);
+  const hasGelatin = /\bgelatin\b/.test(text);
+  const hasHoney = /\bhoney\b/.test(text);
+  const dietFlags = new Set<string>(Array.isArray(recipe?.diet_flags) ? recipe.diet_flags.map((x: any) => String(x)) : []);
+
+  if (!hasMeat && !hasFish && !hasShellfish && !hasDairy && !hasEgg && !hasGelatin && !hasHoney) {
+    dietFlags.add("VEGAN");
+  }
+  if (!hasMeat && !hasFish && !hasShellfish && hasDairy && !hasEgg) {
+    dietFlags.add("LACTO_VEGETARIAN");
+  }
+  if (!hasMeat && !hasFish && !hasShellfish && !hasDairy && hasEgg) {
+    dietFlags.add("OVO_VEGETARIAN");
+  }
+  if (!hasMeat && !hasFish && !hasShellfish && (hasDairy || hasEgg)) {
+    dietFlags.add("LACTO_OVO_VEGETARIAN");
+  }
+  if (!hasMeat && (hasFish || hasShellfish)) {
+    dietFlags.add("PESCATARIAN");
+  }
+
+  return {
+    ...recipe,
+    allergens: Array.from(inferredAllergens),
+    diet_flags: Array.from(dietFlags)
+  };
+}
+
+function enrichRecipesWithSuggestions(recipes: any[]) {
+  return recipes.map((recipe) => inferRecipeDietAndAllergens(recipe));
+}
+
+function normalizeCodeSeed(value: string) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function stripImportLineDecorators(line: string) {
+  return String(line || "")
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/__\*/g, "")
+    .replace(/\*__/g, "")
+    .replace(/[*_`]/g, "")
+    .trim();
+}
+
+function guessTechniqueFamily(name: string) {
+  const value = String(name || "").toLowerCase();
+  if (/beurre blanc/.test(value)) return "BEURRE_BLANC";
+  if (/stock/.test(value)) return "STOCK";
+  if (/sauce|jus|glace|vinaigrette/.test(value)) return "SAUCE";
+  if (/puree|purée/.test(value)) return "PUREE";
+  if (/gel/.test(value)) return "GEL";
+  if (/bavarois/.test(value)) return "BAVAROIS";
+  if (/pickle|pickled/.test(value)) return "PICKLE";
+  if (/salad/.test(value)) return "SALAD";
+  if (/crumble/.test(value)) return "CRUMBLE";
+  if (/crouton/.test(value)) return "CROUTON";
+  if (/brine/.test(value)) return "BRINE";
+  if (/syrup/.test(value)) return "SYRUP";
+  if (/jam|marmalade/.test(value)) return "JAM";
+  if (/bread|brioche/.test(value)) return "BREAD";
+  if (/butter/.test(value)) return "FAT";
+  if (/cream/.test(value)) return "CULTURED_DAIRY";
+  if (/oil/.test(value)) return "OIL";
+  return "OTHER";
+}
+
+function guessComponentRole(recipe: any) {
+  const notePool = [
+    ...(Array.isArray(recipe?.ingredients) ? recipe.ingredients.map((item: any) => String(item?.note || "")) : []),
+    ...(Array.isArray(recipe?.steps) ? recipe.steps.map((item: any) => String(item?.note || "")) : [])
+  ].join(" | ");
+  const name = String(recipe?.meta?.dish_name || "").toLowerCase();
+  if (notePool.includes("AUTO_TAG:PLATING")) return { role: "PLATING", section: "PLATING" };
+  if (notePool.includes("AUTO_TAG:GARNISH")) return { role: "GARNISH", section: "FINISH" };
+  if (/sauce|jus|beurre blanc|glace/.test(name)) return { role: "SAUCE", section: "FINISH" };
+  if (/crumble|crouton|chip|chips|tuile|crumb/.test(name)) return { role: "TEXTURE", section: "FINISH" };
+  if (/flower|daisy|petal|blossom|tips/.test(name)) return { role: "PLATING", section: "PLATING" };
+  if (/stock|brine/.test(name)) return { role: "BASE", section: "PREP" };
+  if (/puree|gel|bavarois|salad|tart/.test(name)) return { role: "BODY", section: "ASSEMBLY" };
+  return { role: "OTHER", section: "ASSEMBLY" };
+}
+
+function extractCompositeTitle(content?: string) {
+  const lines = String(content || "")
+    .split(/\n+/)
+    .map(stripImportLineDecorators)
+    .filter(Boolean);
+  if (lines.length < 1) return "";
+  const first = lines[0];
+  const second = lines[1] || "";
+  if (/^basi[ck]\s+recipes$/i.test(first)) return "";
+  if (/^serves\s+\d+/i.test(second)) return first;
+  if (/^components:?$/i.test(second)) return first;
+  return "";
+}
+
+function extractAssemblySteps(content?: string) {
+  const lines = String(content || "")
+    .split(/\n+/)
+    .map(stripImportLineDecorators)
+    .filter(Boolean);
+  const markerIndex = lines.findIndex((line) => /^(TO FINISH|TO COMPLETE)\b/i.test(line));
+  if (markerIndex < 0) return [];
+  const tail = lines.slice(markerIndex + 1);
+  const sentenceLikeStart = tail.findIndex((line) =>
+    /[.。]/.test(line) ||
+    /^(Heat|Place|Transfer|Using|Slice|Spoon|Garnish|Sauce|Break|Quenelle|Top|Fill|Tap|Sprinkle|Cook|Season|Rewarm|Meanwhile|Just before serving|Pipe)\b/i.test(line)
+  );
+  if (sentenceLikeStart < 0) return [];
+  const text = tail.slice(sentenceLikeStart).join(" ");
+  return text
+    .split(/(?<=[.。])\s+(?=[A-Z\u4e00-\u9fa5])/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 4)
+    .slice(0, 12)
+    .map((action, index) => ({
+      step_id: `assembly_${String(index + 1).padStart(3, "0")}`,
+      step_no: index + 1,
+      action
+    }));
+}
+
+function extractReferencePreps(content: string, knownNames: string[]) {
+  const refs = new Map<string, { ref_name: string; source_ref: string }>();
+  const knownNormalized = new Set(knownNames.map((name) => stripImportLineDecorators(name).toLowerCase()));
+  const regex = /(?:\d+\s+recipe\s+)?["“]?([A-Z][A-Za-z0-9'"&/\-\s]+?)["”]?\s*\((this page|page[^)]+)\)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(String(content || ""))) !== null) {
+    const refName = stripImportLineDecorators(match[1] || "");
+    const sourceRef = stripImportLineDecorators(match[2] || "");
+    if (!refName || refName.length < 3) continue;
+    if (knownNormalized.has(refName.toLowerCase())) continue;
+    const key = `${refName}::${sourceRef}`.toLowerCase();
+    refs.set(key, { ref_name: refName, source_ref: sourceRef });
+  }
+  return Array.from(refs.values());
+}
+
+function extractFinishItems(content: string, knownNames: string[]) {
+  const lines = String(content || "")
+    .split(/\n+/)
+    .map(stripImportLineDecorators)
+    .filter(Boolean);
+  const markerIndex = lines.findIndex((line) => /^(TO FINISH|TO COMPLETE)\b/i.test(line));
+  if (markerIndex < 0) return [];
+  const knownNormalized = knownNames.map((name) => stripImportLineDecorators(name).toLowerCase());
+  const items: Array<{ ref_name: string; quantity: string; unit: string }> = [];
+  for (const line of lines.slice(markerIndex + 1, markerIndex + 15)) {
+    if (
+      /[.。]/.test(line) ||
+      /^(Heat|Place|Transfer|Using|Slice|Spoon|Garnish|Sauce|Break|Quenelle|Top|Fill|Tap|Sprinkle|Cook|Season|Rewarm|Meanwhile|Just before serving|Pipe)\b/i.test(line)
+    ) {
+      break;
+    }
+    const normalized = line.toLowerCase();
+    if (knownNormalized.some((name) => normalized.includes(name))) continue;
+    const match = line.match(/^([0-9]+(?:\.[0-9]+)?|\d+\/\d+)?\s*([A-Za-z%]+)?\s*(.+)$/);
+    const quantity = match?.[1] ? String(match[1]).trim() : "";
+    const unit = match?.[2] ? String(match[2]).trim() : "";
+    const refName = stripImportLineDecorators(match?.[3] || line);
+    if (!refName || refName.length < 2) continue;
+    items.push({ ref_name: refName, quantity, unit });
+  }
+  return items;
+}
+
+function buildV3Preview(recipes: any[], content?: string, parseMethod?: string) {
+  type V3AssemblyComponent = {
+    component_kind: "RECIPE_REF" | "FINISH_ITEM";
+    child_code?: string;
+    ref_name: string;
+    component_role: string;
+    section: string;
+    sort_order: number;
+    quantity?: string;
+    unit?: string;
+  };
+  const normalizedRecipes = Array.isArray(recipes) ? recipes : [];
+  if (normalizedRecipes.length < 1) return null;
+  const knownNames = normalizedRecipes.map((recipe: any) => String(recipe?.meta?.dish_name || "").trim()).filter(Boolean);
+  const title = extractCompositeTitle(content);
+  const hasComponents = /(^|\n)Components:\s*$/im.test(String(content || ""));
+  const hasServes = /(^|\n)Serves\s+\d+/im.test(String(content || ""));
+  const hasFinish = /(TO FINISH|TO COMPLETE)/i.test(String(content || ""));
+  const isBasicLibrary = /^BASIC\s+RECIPES\b/im.test(String(content || "")) || (!title && !hasComponents && !hasServes && !hasFinish && normalizedRecipes.length >= 2);
+  const mode = isBasicLibrary
+    ? "ELEMENT_LIBRARY"
+    : (title || hasComponents || hasFinish || (hasServes && normalizedRecipes.length >= 2))
+      ? "COMPOSITE"
+      : (normalizedRecipes.length === 1 ? "SINGLE_ELEMENT" : "ELEMENT_LIBRARY");
+  const sourcePattern = hasComponents
+    ? "components_mode"
+    : /FOR THE /i.test(String(content || ""))
+      ? "for_the_x_mode"
+      : hasFinish
+        ? "section_mode"
+        : isBasicLibrary
+          ? "basic_library_mode"
+          : (parseMethod || "single_recipe_mode");
+  const elements = normalizedRecipes.map((recipe: any, index: number) => {
+    const role = guessComponentRole(recipe);
+    const businessType = mode === "ELEMENT_LIBRARY"
+      ? "BACKBONE"
+      : String(recipe?.meta?.recipe_type || "BACKBONE");
+    return {
+      index,
+      dish_code: String(recipe?.meta?.dish_code || `AUTO-V3-${index + 1}`),
+      dish_name: String(recipe?.meta?.dish_name || ""),
+      display_name: String(recipe?.meta?.dish_name || ""),
+      aliases: [],
+      entity_kind: "ELEMENT",
+      business_type: businessType,
+      technique_family: guessTechniqueFamily(String(recipe?.meta?.dish_name || "")),
+      component_role: role.role,
+      section: role.section
+    };
+  });
+  const unresolvedRefs = extractReferencePreps(String(content || ""), knownNames).map((item, index) => ({
+    id: `ref_${index + 1}`,
+    component_kind: "REFERENCE_PREP",
+    ref_name: item.ref_name,
+    source_ref: item.source_ref
+  }));
+  const finishItems = extractFinishItems(String(content || ""), knownNames).map((item, index) => ({
+    id: `finish_${index + 1}`,
+    component_kind: "FINISH_ITEM",
+    ref_name: item.ref_name,
+    quantity: item.quantity,
+    unit: item.unit
+  }));
+  const assemblyComponents: V3AssemblyComponent[] = [
+    ...elements.map((element, index) => ({
+      component_kind: "RECIPE_REF" as const,
+      child_code: element.dish_code,
+      ref_name: element.dish_name,
+      component_role: element.component_role,
+      section: element.section,
+      sort_order: index + 1
+    })),
+    ...finishItems.map((item, index) => ({
+      component_kind: "FINISH_ITEM" as const,
+      ref_name: item.ref_name,
+      component_role: "PLATING",
+      section: "PLATING",
+      quantity: item.quantity,
+      unit: item.unit,
+      sort_order: elements.length + index + 1
+    }))
+  ];
+
+  const composite = mode === "COMPOSITE"
+    ? {
+        dish_code: normalizeCodeSeed(title || `AUTO_COMPOSITE_${normalizedRecipes[0]?.meta?.dish_name || "ITEM"}`),
+        dish_name: title || String(normalizedRecipes[0]?.meta?.dish_name || "Composite Dish"),
+        display_name: title || String(normalizedRecipes[0]?.meta?.dish_name || "Composite Dish"),
+        aliases: [],
+        entity_kind: "COMPOSITE",
+        business_type: "MENU",
+        menu_cycle: normalizedRecipes.find((recipe: any) => recipe?.meta?.recipe_type === "MENU")?.meta?.menu_cycle || null,
+        assembly_components: assemblyComponents,
+        assembly_steps: extractAssemblySteps(content)
+      }
+    : null;
+
+  return {
+    mode,
+    source_pattern: sourcePattern,
+    composite,
+    elements,
+    unresolved_refs: unresolvedRefs,
+    finish_items: finishItems
+  };
+}
+
 function scoreImportResult(result: any) {
   const recipes = Array.isArray(result?.recipes) ? result.recipes : [];
   const count = recipes.length;
@@ -703,6 +1022,7 @@ function normalizeRecipe(raw: any, idx: number) {
       key_temperature_points: Array.isArray(raw?.production?.key_temperature_points) ? raw.production.key_temperature_points : []
     },
     allergens: Array.isArray(raw?.allergens) ? raw.allergens.map((item: any) => String(item)).filter(Boolean) : [],
+    diet_flags: Array.isArray(raw?.diet_flags) ? raw.diet_flags.map((item: any) => String(item)).filter(Boolean) : [],
     ingredients: Array.isArray(raw?.ingredients) && raw.ingredients.length > 0
       ? raw.ingredients.map((item: any) => ({
           name: String(item?.name || "").trim(),
@@ -743,19 +1063,21 @@ async function importFromPreparedText(content: string, options?: {
     deterministicParseMethod
   });
   if (deterministic.length >= 2 || (parsed.hasComponentsHeader && deterministic.length >= 1)) {
-    const warnings = buildWarnings(deterministic);
+    const enrichedRecipes = enrichRecipesWithSuggestions(deterministic);
+    const warnings = buildWarnings(enrichedRecipes);
     const extras = options?.deterministicReason ? [options.deterministicReason] : [];
-    const reviewReasons = buildReviewReasons(deterministic, parsed.components.length, null, extras);
+    const reviewReasons = buildReviewReasons(enrichedRecipes, parsed.components.length, null, extras);
     return {
       success: true,
-      recipes: deterministic,
-      count: deterministic.length,
+      recipes: enrichedRecipes,
+      count: enrichedRecipes.length,
       warnings,
+      v3_preview: buildV3Preview(enrichedRecipes, normalized, deterministicParseMethod),
       review: {
         needs_manual_review: true,
         reasons: reviewReasons,
         detected_components_count: parsed.components.length,
-        detected_recipe_count: deterministic.length,
+        detected_recipe_count: enrichedRecipes.length,
         parse_method: deterministicParseMethod
       }
     };
@@ -795,7 +1117,7 @@ async function importFromPreparedText(content: string, options?: {
   } else if (recipes.length < 1 || fallbackRecipes.length > recipes.length) {
     recipes = fallbackRecipes;
   }
-  recipes = capRecipes(recipes, 20);
+  recipes = enrichRecipesWithSuggestions(capRecipes(recipes, 20));
   const warnings = buildWarnings(recipes);
   const reviewReasons = buildReviewReasons(recipes, detectedComponentsCount, aiParseError, options?.extraReasons || []);
   return {
@@ -803,6 +1125,7 @@ async function importFromPreparedText(content: string, options?: {
     recipes,
     count: recipes.length,
     warnings,
+    v3_preview: buildV3Preview(recipes, normalized, aiParseError ? fallbackParseMethod : aiParseMethod),
     review: {
       needs_manual_review: reviewReasons.length > 0,
       reasons: reviewReasons,
@@ -852,18 +1175,20 @@ async function importFromPreparedVision(imageBase64: string, options?: {
       .filter((item: { meta: { dish_name: string } }) => item.meta.dish_name),
     20
   );
-  const warnings = buildWarnings(recipes);
-  const reviewReasons = buildReviewReasons(recipes, 0, null, options?.extraReasons || []);
+  const enrichedRecipes = enrichRecipesWithSuggestions(recipes);
+  const warnings = buildWarnings(enrichedRecipes);
+  const reviewReasons = buildReviewReasons(enrichedRecipes, 0, null, options?.extraReasons || []);
   return {
     success: true,
-    recipes,
-    count: recipes.length,
+    recipes: enrichedRecipes,
+    count: enrichedRecipes.length,
     warnings,
+    v3_preview: buildV3Preview(enrichedRecipes, undefined, options?.aiParseMethod || "docx_vision_ai"),
     review: {
       needs_manual_review: reviewReasons.length > 0,
       reasons: reviewReasons,
       detected_components_count: 0,
-      detected_recipe_count: recipes.length,
+      detected_recipe_count: enrichedRecipes.length,
       parse_method: options?.aiParseMethod || "docx_vision_ai"
     }
   };

@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publishRecipeVersion, getRecipeDetail, logRecipeSync } from "@/lib/db";
 import { pushRecipeToBangwagong } from "@/lib/bangwagong";
+import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
 export const preferredRegion = "hkg1";
 
 export async function POST(request: NextRequest, context: { params: { versionId: string } }) {
+  if (!hasPersistentRecipeStore()) {
+    return NextResponse.json({
+      error: "PERSISTENT_DB_REQUIRED",
+      message: "当前环境是临时数据库，不能稳定发布版本。请切换到持久数据库环境后重试。"
+    }, { status: 409 });
+  }
   const versionId = Number(context.params.versionId);
   if (!Number.isInteger(versionId) || versionId <= 0) {
     return NextResponse.json({ error: "INVALID_ID" }, { status: 400 });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createImportedRecipeDrafts } from "@/lib/db";
 import { requirePermission } from "@/lib/permissions";
+import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
 export const preferredRegion = "hkg1";
@@ -14,6 +15,7 @@ type DraftItem = {
   servings?: string;
   net_yield_rate?: number;
   allergens?: string[];
+  diet_flags?: string[];
   ingredients?: Array<{ name: string; quantity: string; unit: string; note?: string }>;
   steps?: Array<{ step_no?: number; action: string; time_sec?: number; temp_c?: number; ccp?: string; note?: string }>;
 };
@@ -34,6 +36,7 @@ function toRecipeRecord(item: DraftItem, index: number) {
       key_temperature_points: []
     },
     allergens: Array.isArray(item.allergens) ? item.allergens.map((x) => String(x).trim()).filter(Boolean) : [],
+    diet_flags: Array.isArray(item.diet_flags) ? item.diet_flags.map((x) => String(x).trim()).filter(Boolean) : [],
     ingredients: Array.isArray(item.ingredients) && item.ingredients.length > 0
       ? item.ingredients.map((ing) => ({
           name: String(ing.name || "").trim(),
@@ -57,6 +60,12 @@ function toRecipeRecord(item: DraftItem, index: number) {
 
 export async function POST(request: NextRequest) {
   try {
+    if (!hasPersistentRecipeStore()) {
+      return NextResponse.json({
+        error: "PERSISTENT_DB_REQUIRED",
+        message: "当前环境是临时数据库，不能稳定创建草稿。请切换到持久数据库环境后重试。"
+      }, { status: 409 });
+    }
     const body = await request.json();
     const actorEmail = String(body.actor_email || "");
     const guard = await requirePermission("recipe:import", actorEmail);
@@ -69,7 +78,8 @@ export async function POST(request: NextRequest) {
     const recipes = recipesFromDraft || (Array.isArray(body.recipes) ? body.recipes : []);
     const created = createImportedRecipeDrafts({
       actor_email: actorEmail,
-      recipes
+      recipes,
+      v3_preview: body.v3_preview
     });
     return NextResponse.json({
       success: true,

@@ -1,8 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import Database from "better-sqlite3";
 import { convertUnitPrice, normalizeUnitAlias } from "@/lib/unit-convert";
+import { resolveDataFile } from "@/lib/data-paths";
 import type {
   CreateOrderPayload,
   DailyListItem,
@@ -18,21 +16,14 @@ import type {
   RecipeUser,
   RecipeUserRole,
   RecipeVersion,
+  RecipeVersionComponent,
   OrderItem,
   Station,
   Supplier,
   UnitOption
 } from "@/lib/types";
 
-const runtimeDbBase = process.env.VERCEL ? os.tmpdir() : process.cwd();
-const dbDir = path.join(runtimeDbBase, "data");
-const dbPath = path.join(dbDir, "app.db");
-
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
-const db = new Database(dbPath);
+const db = new Database(resolveDataFile(process.env.RECIPES_DB_FILE || "app.db"));
 
 db.pragma("journal_mode = WAL");
 
@@ -126,6 +117,9 @@ CREATE TABLE IF NOT EXISTS recipes (
   code TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   description TEXT,
+  entity_kind TEXT NOT NULL DEFAULT 'ELEMENT' CHECK (entity_kind IN ('COMPOSITE', 'ELEMENT')),
+  business_type TEXT NOT NULL DEFAULT 'BACKBONE' CHECK (business_type IN ('MENU', 'BACKBONE')),
+  technique_family TEXT,
   recipe_type TEXT NOT NULL DEFAULT 'BACKBONE' CHECK (recipe_type IN ('MENU', 'BACKBONE')),
   menu_cycle TEXT,
   active_version_id INTEGER,
@@ -165,6 +159,31 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
   note TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (recipe_version_id) REFERENCES recipe_versions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS recipe_version_components (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  parent_version_id INTEGER NOT NULL,
+  component_kind TEXT NOT NULL CHECK (
+    component_kind IN ('RECIPE_REF', 'REFERENCE_PREP', 'RAW_ITEM', 'FINISH_ITEM')
+  ),
+  child_recipe_id INTEGER,
+  child_version_id INTEGER,
+  display_name TEXT NOT NULL,
+  component_role TEXT,
+  section TEXT NOT NULL CHECK (
+    section IN ('PREP', 'INTERMEDIATE', 'ASSEMBLY', 'FINISH', 'PLATING')
+  ),
+  quantity TEXT,
+  unit TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_optional INTEGER NOT NULL DEFAULT 0,
+  source_ref TEXT,
+  prep_note TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (parent_version_id) REFERENCES recipe_versions(id) ON DELETE CASCADE,
+  FOREIGN KEY (child_recipe_id) REFERENCES recipes(id),
+  FOREIGN KEY (child_version_id) REFERENCES recipe_versions(id)
 );
 
 CREATE TABLE IF NOT EXISTS recipe_sync_logs (
@@ -225,6 +244,9 @@ CREATE INDEX IF NOT EXISTS idx_recipe_users_email ON recipe_users(email);
 CREATE INDEX IF NOT EXISTS idx_recipe_versions_recipe ON recipe_versions(recipe_id);
 CREATE INDEX IF NOT EXISTS idx_recipe_versions_status ON recipe_versions(status);
 CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_version ON recipe_ingredients(recipe_version_id);
+CREATE INDEX IF NOT EXISTS idx_recipe_version_components_parent ON recipe_version_components(parent_version_id, section, sort_order);
+CREATE INDEX IF NOT EXISTS idx_recipe_version_components_child_recipe ON recipe_version_components(child_recipe_id);
+CREATE INDEX IF NOT EXISTS idx_recipe_version_components_child_version ON recipe_version_components(child_version_id);
 CREATE INDEX IF NOT EXISTS idx_recipe_sync_logs_recipe ON recipe_sync_logs(recipe_id);
 CREATE INDEX IF NOT EXISTS idx_foh_guest_checks_date ON foh_guest_checks(service_date, created_at);
 CREATE INDEX IF NOT EXISTS idx_daily_menu_items_menu ON daily_menu_items(menu_id);
@@ -253,6 +275,15 @@ const recipeColumns = db.prepare("PRAGMA table_info(recipes)").all() as Array<{ 
 if (!recipeColumns.some((col) => col.name === "recipe_type")) {
   db.exec("ALTER TABLE recipes ADD COLUMN recipe_type TEXT NOT NULL DEFAULT 'BACKBONE'");
 }
+if (!recipeColumns.some((col) => col.name === "entity_kind")) {
+  db.exec("ALTER TABLE recipes ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'ELEMENT'");
+}
+if (!recipeColumns.some((col) => col.name === "business_type")) {
+  db.exec("ALTER TABLE recipes ADD COLUMN business_type TEXT NOT NULL DEFAULT 'BACKBONE'");
+}
+if (!recipeColumns.some((col) => col.name === "technique_family")) {
+  db.exec("ALTER TABLE recipes ADD COLUMN technique_family TEXT");
+}
 if (!recipeColumns.some((col) => col.name === "menu_cycle")) {
   db.exec("ALTER TABLE recipes ADD COLUMN menu_cycle TEXT");
 }
@@ -260,7 +291,17 @@ if (!recipeColumns.some((col) => col.name === "import_source")) {
   db.exec("ALTER TABLE recipes ADD COLUMN import_source TEXT NOT NULL DEFAULT 'manual'");
 }
 db.exec("UPDATE recipes SET recipe_type = 'BACKBONE' WHERE recipe_type IS NULL OR TRIM(recipe_type) = ''");
+db.exec("UPDATE recipes SET entity_kind = 'ELEMENT' WHERE entity_kind IS NULL OR TRIM(entity_kind) = ''");
+db.exec(`
+  UPDATE recipes
+  SET business_type = CASE
+    WHEN recipe_type IN ('MENU', 'BACKBONE') THEN recipe_type
+    ELSE 'BACKBONE'
+  END
+  WHERE business_type IS NULL OR TRIM(business_type) = ''
+`);
 db.exec("CREATE INDEX IF NOT EXISTS idx_recipes_type_cycle ON recipes(recipe_type, menu_cycle)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_recipes_entity_business ON recipes(entity_kind, business_type, technique_family)");
 const recipeVersionColumns = db.prepare("PRAGMA table_info(recipe_versions)").all() as Array<{ name: string }>;
 if (!recipeVersionColumns.some((col) => col.name === "record_json")) {
   db.exec("ALTER TABLE recipe_versions ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'");
@@ -1132,6 +1173,7 @@ type RecipeRecordV2 = {
     }>;
   };
   allergens: string[];
+  diet_flags?: string[];
   ingredients: Array<{
     name: string;
     quantity: string;
@@ -1176,6 +1218,7 @@ function buildDefaultRecipeRecordV2(input: {
       key_temperature_points: []
     },
     allergens: [],
+    diet_flags: [],
     ingredients: input.ingredients.map((item) => ({
       name: String(item.name || "").trim(),
       quantity: String(item.quantity || "").trim(),
@@ -1206,18 +1249,22 @@ function validateRecipeRecordV2(input: unknown) {
     return { ok: false, errors: ["root.object_required"] };
   }
   const record = input as Record<string, unknown>;
-  const rootUnexpected = hasUnexpectedKeys(record, ["meta", "production", "allergens", "ingredients", "steps"]);
+  const rootUnexpected = hasUnexpectedKeys(record, ["meta", "production", "allergens", "diet_flags", "ingredients", "steps"]);
   if (rootUnexpected.length > 0) errors.push(`root.additional_properties:${rootUnexpected.join("|")}`);
 
   if (!("meta" in record)) errors.push("meta.required");
   if (!("production" in record)) errors.push("production.required");
   if (!("allergens" in record)) errors.push("allergens.required");
+  if (!("diet_flags" in record)) {
+    // optional
+  }
   if (!("ingredients" in record)) errors.push("ingredients.required");
   if (!("steps" in record)) errors.push("steps.required");
 
   const meta = record.meta;
   const production = record.production;
   const allergens = record.allergens;
+  const dietFlags = record.diet_flags;
   const ingredients = record.ingredients;
   const steps = record.steps;
 
@@ -1295,6 +1342,15 @@ function validateRecipeRecordV2(input: unknown) {
     allergens.forEach((item, idx) => {
       if (typeof item !== "string") errors.push(`allergens.${idx}.string_required`);
     });
+  }
+  if (dietFlags !== undefined) {
+    if (!Array.isArray(dietFlags)) {
+      errors.push("diet_flags.array_required");
+    } else {
+      dietFlags.forEach((item, idx) => {
+        if (typeof item !== "string") errors.push(`diet_flags.${idx}.string_required`);
+      });
+    }
   }
 
   if (!Array.isArray(ingredients) || ingredients.length < 1) {
@@ -1388,6 +1444,9 @@ function normalizeRecipeRecordV2(input: unknown) {
     allergens: Array.isArray(record?.allergens)
       ? record.allergens.map((item: unknown) => String(item || "").trim()).filter(Boolean)
       : [],
+    diet_flags: Array.isArray(record?.diet_flags)
+      ? record.diet_flags.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+      : [],
     ingredients: Array.isArray(record?.ingredients)
       ? record.ingredients.map((item: any) => ({
           name: String(item?.name || "").trim(),
@@ -1419,6 +1478,43 @@ function normalizeRecipeRecordV2(input: unknown) {
   };
 
   return output;
+}
+
+function isCompositeRecipeRecord(input: unknown): input is {
+  meta: {
+    dish_code: string;
+    dish_name: string;
+    entity_kind: "COMPOSITE";
+    business_type: "MENU" | "BACKBONE";
+    menu_cycle: string | null;
+  };
+  assembly_components: unknown[];
+  assembly_steps: unknown[];
+} {
+  if (!isPlainObject(input)) return false;
+  if (!isPlainObject(input.meta)) return false;
+  return input.meta.entity_kind === "COMPOSITE" &&
+    Array.isArray((input as any).assembly_components) &&
+    Array.isArray((input as any).assembly_steps);
+}
+
+function validateCompositeRecordV3Lite(input: unknown) {
+  const errors: string[] = [];
+  if (!isCompositeRecipeRecord(input)) {
+    return { ok: false, errors: ["composite.root.invalid"] };
+  }
+  const meta = input.meta as Record<string, unknown>;
+  if (typeof meta.dish_code !== "string" || meta.dish_code.trim().length < 1) errors.push("composite.meta.dish_code.invalid");
+  if (typeof meta.dish_name !== "string" || meta.dish_name.trim().length < 1) errors.push("composite.meta.dish_name.invalid");
+  if (meta.business_type !== "MENU" && meta.business_type !== "BACKBONE") errors.push("composite.meta.business_type.invalid");
+  if ("menu_cycle" in meta && meta.menu_cycle !== null && typeof meta.menu_cycle !== "string") errors.push("composite.meta.menu_cycle.invalid");
+  if (!Array.isArray(input.assembly_components) || input.assembly_components.length < 1) {
+    errors.push("composite.assembly_components.min_1");
+  }
+  if (!Array.isArray(input.assembly_steps) || input.assembly_steps.length < 1) {
+    errors.push("composite.assembly_steps.min_1");
+  }
+  return { ok: errors.length === 0, errors };
 }
 
 function getRecipeUserByEmail(email: string) {
@@ -1478,6 +1574,42 @@ function getRecipeIngredients(versionId: number) {
     .all(versionId) as RecipeIngredient[];
 }
 
+function getRecipeVersionComponents(versionId: number) {
+  return db
+    .prepare(`
+      SELECT
+        id,
+        parent_version_id,
+        component_kind,
+        child_recipe_id,
+        child_version_id,
+        display_name,
+        component_role,
+        section,
+        quantity,
+        unit,
+        sort_order,
+        is_optional,
+        source_ref,
+        prep_note
+      FROM recipe_version_components
+      WHERE parent_version_id = ?
+      ORDER BY sort_order ASC, id ASC
+    `)
+    .all(versionId) as RecipeVersionComponent[];
+}
+
+function findRecipeByCode(code: string) {
+  return db
+    .prepare(`
+      SELECT id, code, name, active_version_id
+      FROM recipes
+      WHERE code = ?
+      LIMIT 1
+    `)
+    .get(code) as { id: number; code: string; name: string; active_version_id: number | null } | undefined;
+}
+
 export function getRecipeUsers(includeInactive = false): RecipeUser[] {
   if (includeInactive) {
     return db
@@ -1497,6 +1629,9 @@ export function listRecipes(): RecipeSummary[] {
         r.code,
         r.name,
         r.description,
+        r.entity_kind,
+        r.business_type,
+        r.technique_family,
         r.recipe_type,
         r.menu_cycle,
         r.active_version_id,
@@ -1519,6 +1654,9 @@ export function getRecipeDetail(recipeId: number): RecipeDetail | null {
         r.code,
         r.name,
         r.description,
+        r.entity_kind,
+        r.business_type,
+        r.technique_family,
         r.recipe_type,
         r.menu_cycle,
         r.active_version_id,
@@ -1550,7 +1688,8 @@ export function getRecipeDetail(recipeId: number): RecipeDetail | null {
     ...recipe,
     versions: versions.map((version) => ({
       ...version,
-      ingredients: getRecipeIngredients(version.id)
+      ingredients: getRecipeIngredients(version.id),
+      components: getRecipeVersionComponents(version.id)
     }))
   };
 }
@@ -1581,8 +1720,8 @@ export function createRecipeWithDraft(input: {
   }
 
   const insertRecipe = db.prepare(`
-    INSERT INTO recipes(code, name, description, recipe_type, menu_cycle, created_by, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO recipes(code, name, description, entity_kind, business_type, technique_family, recipe_type, menu_cycle, created_by, updated_at)
+    VALUES (?, ?, ?, 'ELEMENT', ?, NULL, ?, ?, ?, datetime('now'))
   `);
   const insertVersion = db.prepare(`
     INSERT INTO recipe_versions(
@@ -1616,6 +1755,7 @@ export function createRecipeWithDraft(input: {
       code,
       name,
       input.description?.trim() || null,
+      recipeType,
       recipeType,
       recipeType === "MENU" ? menuCycle : null,
       actor.email
@@ -1699,13 +1839,14 @@ export function createRecipeRevision(recipeId: number, createdBy: string) {
 export function createImportedRecipeDrafts(input: {
   actor_email: string;
   recipes: unknown[];
+  v3_preview?: any;
 }) {
   const actor = ensureRecipeRole(input.actor_email, ["OWNER", "EDITOR"]);
   if (!Array.isArray(input.recipes) || input.recipes.length < 1) throw new Error("RECIPES_REQUIRED");
 
   const insertRecipe = db.prepare(`
-    INSERT INTO recipes(code, name, description, recipe_type, menu_cycle, import_source, created_by, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'import', ?, datetime('now'))
+    INSERT INTO recipes(code, name, description, entity_kind, business_type, technique_family, recipe_type, menu_cycle, import_source, created_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, datetime('now'))
   `);
   const insertVersion = db.prepare(`
     INSERT INTO recipe_versions(
@@ -1716,84 +1857,253 @@ export function createImportedRecipeDrafts(input: {
     INSERT INTO recipe_ingredients(recipe_version_id, name, quantity, unit, note, sort_order)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
+  const insertComponentLink = db.prepare(`
+    INSERT INTO recipe_version_components(
+      parent_version_id, component_kind, child_recipe_id, child_version_id, display_name,
+      component_role, section, quantity, unit, sort_order, is_optional, source_ref, prep_note
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const createElementDraft = (
+    normalized: RecipeRecordV2,
+    options?: {
+      codeSeed?: string;
+      business_type?: "MENU" | "BACKBONE";
+      technique_family?: string | null;
+      import_note?: string;
+      entity_kind?: "ELEMENT" | "COMPOSITE";
+      record_json?: string;
+      instructions_override?: string;
+    }
+  ) => {
+    const recipeType = options?.business_type || (normalized.meta.recipe_type === "MENU" ? "MENU" : "BACKBONE");
+    const dishName = String(normalized.meta.dish_name || "").trim();
+    if (!dishName) throw new Error("DISH_NAME_REQUIRED");
+    const menuCycle = recipeType === "MENU"
+      ? (normalized.meta.menu_cycle ? normalizeMenuCycle(normalized.meta.menu_cycle) : null)
+      : null;
+    const code = ensureUniqueRecipeCode(options?.codeSeed || normalized.meta.dish_code || makeAutoRecipeCode(0));
+    const nextRecord: RecipeRecordV2 = {
+      ...normalized,
+      meta: {
+        ...normalized.meta,
+        dish_code: code,
+        dish_name: dishName,
+        recipe_type: recipeType,
+        menu_cycle: menuCycle
+      },
+      production: {
+        ...normalized.production,
+        servings: String(normalized.production.servings || "1份"),
+        net_yield_rate: Number.isFinite(Number(normalized.production.net_yield_rate))
+          ? Number(normalized.production.net_yield_rate) || 1
+          : 1
+      },
+      ingredients: normalized.ingredients.filter((item) => item.name && item.quantity && item.unit),
+      steps: normalized.steps.length > 0 ? normalized.steps : [{ step_no: 1, action: "待填写", time_sec: 0 }]
+    };
+    const validation = validateRecipeRecordV2ForDraft(nextRecord);
+    if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
+
+    const instructions = options?.instructions_override || nextRecord.steps
+      .sort((a, b) => Number(a.step_no) - Number(b.step_no))
+      .map((step) => `${step.step_no}. ${step.action}`)
+      .join("\n");
+    const recipeResult = insertRecipe.run(
+      code,
+      dishName,
+      null,
+      options?.entity_kind || "ELEMENT",
+      recipeType,
+      options?.technique_family || null,
+      recipeType,
+      menuCycle,
+      actor.email
+    );
+    const recipeId = Number(recipeResult.lastInsertRowid);
+    const versionResult = insertVersion.run(
+      recipeId,
+      nextRecord.production.servings || "1份",
+      instructions,
+      options?.record_json || JSON.stringify(nextRecord),
+      options?.import_note || "智能导入创建",
+      actor.email
+    );
+    const versionId = Number(versionResult.lastInsertRowid);
+    nextRecord.ingredients.forEach((ingredient, idx) => {
+      insertIngredient.run(
+        versionId,
+        ingredient.name,
+        ingredient.quantity,
+        ingredient.unit,
+        ingredient.note || null,
+        idx + 1
+      );
+    });
+    db.prepare("UPDATE recipes SET active_version_id = ?, updated_at = datetime('now') WHERE id = ?").run(versionId, recipeId);
+    return {
+      recipe_id: recipeId,
+      version_id: versionId,
+      version: "v1" as const,
+      status: "DRAFT" as const,
+      dish_name: dishName,
+      code,
+      recipe_type: recipeType
+    };
+  };
 
   const run = db.transaction(() => {
     const created: Array<{ recipe_id: number; version_id: number; version: string; status: string; dish_name: string }> = [];
+    const preview = input.v3_preview && typeof input.v3_preview === "object" ? input.v3_preview : null;
+    const previewMode = String(preview?.mode || "");
+    const previewElements = Array.isArray(preview?.elements) ? preview.elements : [];
+
+    if (preview && previewMode === "COMPOSITE" && preview?.composite) {
+      const createdByPreviewCode = new Map<string, ReturnType<typeof createElementDraft>>();
+      const createdByIndex = new Map<number, ReturnType<typeof createElementDraft>>();
+
+      for (let i = 0; i < input.recipes.length; i += 1) {
+        const raw = input.recipes[i];
+        const normalized = normalizeRecipeRecordV2(raw);
+        const previewElement = previewElements.find((item: any) => Number(item?.index) === i) || previewElements[i] || null;
+        const createdElement = createElementDraft(normalized, {
+          codeSeed: previewElement?.dish_code || normalized.meta.dish_code || makeAutoRecipeCode(i),
+          business_type: previewElement?.business_type === "BACKBONE" ? "BACKBONE" : "MENU",
+          technique_family: previewElement?.technique_family ? String(previewElement.technique_family) : null,
+          import_note: "V3-lite 复合菜子配方导入",
+          entity_kind: "ELEMENT"
+        });
+        created.push(createdElement);
+        createdByIndex.set(i, createdElement);
+        if (previewElement?.dish_code) {
+          createdByPreviewCode.set(String(previewElement.dish_code), createdElement);
+        }
+      }
+
+      const compositeRaw = preview.composite;
+      const compositeCode = ensureUniqueRecipeCode(compositeRaw.dish_code || makeAutoRecipeCode(input.recipes.length));
+      const compositeRecord = {
+        meta: {
+          dish_code: compositeCode,
+          dish_name: String(compositeRaw.dish_name || "").trim(),
+          display_name: String(compositeRaw.display_name || compositeRaw.dish_name || "").trim(),
+          aliases: Array.isArray(compositeRaw.aliases) ? compositeRaw.aliases.map((item: any) => String(item)).filter(Boolean) : [],
+          entity_kind: "COMPOSITE",
+          business_type: "MENU",
+          menu_cycle: compositeRaw.menu_cycle ? normalizeMenuCycle(String(compositeRaw.menu_cycle)) : null
+        },
+        assembly_components: Array.isArray(compositeRaw.assembly_components) ? compositeRaw.assembly_components : [],
+        assembly_steps: Array.isArray(compositeRaw.assembly_steps) ? compositeRaw.assembly_steps : []
+      };
+      const compositeNormalized = normalizeRecipeRecordV2({
+        meta: {
+          dish_code: compositeCode,
+          dish_name: compositeRecord.meta.dish_name,
+          recipe_type: "MENU",
+          menu_cycle: compositeRecord.meta.menu_cycle,
+          plating_image_url: ""
+        },
+        production: {
+          servings: "1道",
+          net_yield_rate: 1,
+          key_temperature_points: []
+        },
+        allergens: [],
+        ingredients: [{ name: "见 assembly components", quantity: "1", unit: "组", note: "V3-lite composite placeholder" }],
+        steps: compositeRecord.assembly_steps.length > 0
+          ? compositeRecord.assembly_steps.map((step: any, idx: number) => ({
+              step_no: Number(step?.step_no || idx + 1),
+              action: String(step?.action || "").trim() || "待填写",
+              time_sec: 0
+            }))
+          : [{ step_no: 1, action: "待填写整道菜 assembly 动作", time_sec: 0 }]
+      });
+      const compositeCreated = createElementDraft(compositeNormalized, {
+        codeSeed: compositeCode,
+        business_type: "MENU",
+        technique_family: "COMPOSITE",
+        import_note: "V3-lite 复合菜导入",
+        entity_kind: "COMPOSITE",
+        record_json: JSON.stringify(compositeRecord),
+        instructions_override: compositeRecord.assembly_steps
+          .map((step: any, idx: number) => `${Number(step?.step_no || idx + 1)}. ${String(step?.action || "").trim()}`)
+          .filter(Boolean)
+          .join("\n")
+      });
+
+      const assemblyComponents = Array.isArray(compositeRaw.assembly_components) ? compositeRaw.assembly_components : [];
+      assemblyComponents.forEach((component: any, idx: number) => {
+        const linked = component?.child_code ? createdByPreviewCode.get(String(component.child_code)) : undefined;
+        insertComponentLink.run(
+          compositeCreated.version_id,
+          linked ? "RECIPE_REF" : (String(component?.component_kind || "REFERENCE_PREP") as "RECIPE_REF" | "REFERENCE_PREP" | "RAW_ITEM" | "FINISH_ITEM"),
+          linked?.recipe_id || null,
+          linked?.version_id || null,
+          String(component?.ref_name || linked?.dish_name || component?.child_code || `component-${idx + 1}`),
+          component?.component_role ? String(component.component_role) : null,
+          component?.section ? String(component.section) : "ASSEMBLY",
+          component?.quantity ? String(component.quantity) : null,
+          component?.unit ? String(component.unit) : null,
+          Number(component?.sort_order || idx + 1),
+          Number(component?.is_optional ? 1 : 0),
+          null,
+          null
+        );
+      });
+
+      const unresolvedRefs = Array.isArray(preview?.unresolved_refs) ? preview.unresolved_refs : [];
+      unresolvedRefs.forEach((item: any, idx: number) => {
+        insertComponentLink.run(
+          compositeCreated.version_id,
+          "REFERENCE_PREP",
+          null,
+          null,
+          String(item?.ref_name || `ref-${idx + 1}`),
+          null,
+          "PREP",
+          item?.quantity ? String(item.quantity) : null,
+          item?.unit ? String(item.unit) : null,
+          1000 + idx,
+          0,
+          item?.source_ref ? String(item.source_ref) : null,
+          null
+        );
+      });
+
+      const finishItems = Array.isArray(preview?.finish_items) ? preview.finish_items : [];
+      finishItems.forEach((item: any, idx: number) => {
+        insertComponentLink.run(
+          compositeCreated.version_id,
+          "FINISH_ITEM",
+          null,
+          null,
+          String(item?.ref_name || `finish-${idx + 1}`),
+          "PLATING",
+          "PLATING",
+          item?.quantity ? String(item.quantity) : null,
+          item?.unit ? String(item.unit) : null,
+          2000 + idx,
+          0,
+          item?.source_ref ? String(item.source_ref) : null,
+          null
+        );
+      });
+
+      created.unshift(compositeCreated);
+      return created;
+    }
 
     for (let i = 0; i < input.recipes.length; i += 1) {
       const raw = input.recipes[i];
       const normalized = normalizeRecipeRecordV2(raw);
-      const recipeType = normalized.meta.recipe_type === "MENU" ? "MENU" : "BACKBONE";
-      const dishName = String(normalized.meta.dish_name || "").trim();
-      if (!dishName) throw new Error("DISH_NAME_REQUIRED");
-
-      const menuCycle = recipeType === "MENU"
-        ? (normalized.meta.menu_cycle ? normalizeMenuCycle(normalized.meta.menu_cycle) : null)
-        : null;
-      const code = ensureUniqueRecipeCode(normalized.meta.dish_code || makeAutoRecipeCode(i));
-
-      const nextRecord: RecipeRecordV2 = {
-        ...normalized,
-        meta: {
-          ...normalized.meta,
-          dish_code: code,
-          dish_name: dishName,
-          recipe_type: recipeType,
-          menu_cycle: menuCycle
-        },
-        production: {
-          ...normalized.production,
-          servings: String(normalized.production.servings || "1份"),
-          net_yield_rate: Number.isFinite(Number(normalized.production.net_yield_rate))
-            ? Number(normalized.production.net_yield_rate) || 1
-            : 1
-        },
-        ingredients: normalized.ingredients.filter((item) => item.name && item.quantity && item.unit),
-        steps: normalized.steps.length > 0 ? normalized.steps : [{ step_no: 1, action: "待填写", time_sec: 0 }]
-      };
-      const validation = validateRecipeRecordV2ForDraft(nextRecord);
-      if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
-
-      const instructions = nextRecord.steps
-        .sort((a, b) => Number(a.step_no) - Number(b.step_no))
-        .map((step) => `${step.step_no}. ${step.action}`)
-        .join("\n");
-      const recipeResult = insertRecipe.run(
-        code,
-        dishName,
-        null,
-        recipeType,
-        menuCycle,
-        actor.email
-      );
-      const recipeId = Number(recipeResult.lastInsertRowid);
-      const versionResult = insertVersion.run(
-        recipeId,
-        nextRecord.production.servings || "1份",
-        instructions,
-        JSON.stringify(nextRecord),
-        "智能导入创建",
-        actor.email
-      );
-      const versionId = Number(versionResult.lastInsertRowid);
-      nextRecord.ingredients.forEach((ingredient, idx) => {
-        insertIngredient.run(
-          versionId,
-          ingredient.name,
-          ingredient.quantity,
-          ingredient.unit,
-          ingredient.note || null,
-          idx + 1
-        );
-      });
-      db.prepare("UPDATE recipes SET active_version_id = ?, updated_at = datetime('now') WHERE id = ?").run(versionId, recipeId);
-      created.push({
-        recipe_id: recipeId,
-        version_id: versionId,
-        version: "v1",
-        status: "DRAFT",
-        dish_name: dishName
-      });
+      const previewElement = previewElements.find((item: any) => Number(item?.index) === i) || previewElements[i] || null;
+      created.push(createElementDraft(normalized, {
+        codeSeed: normalized.meta.dish_code || makeAutoRecipeCode(i),
+        business_type: previewElement?.business_type === "MENU" ? "MENU" : previewElement?.business_type === "BACKBONE" ? "BACKBONE" : undefined,
+        technique_family: previewElement?.technique_family ? String(previewElement.technique_family) : null,
+        import_note: "智能导入创建",
+        entity_kind: "ELEMENT"
+      }));
     }
 
     return created;
@@ -2031,11 +2341,19 @@ export function updateRecipeDraft(versionId: number, input: {
     INSERT INTO recipe_ingredients(recipe_version_id, name, quantity, unit, note, sort_order)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
+  const deleteComponents = db.prepare("DELETE FROM recipe_version_components WHERE parent_version_id = ?");
+  const insertComponent = db.prepare(`
+    INSERT INTO recipe_version_components(
+      parent_version_id, component_kind, child_recipe_id, child_version_id, display_name,
+      component_role, section, quantity, unit, sort_order, is_optional, source_ref, prep_note
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
 
   const instructions = input.instructions?.trim() || version.instructions;
   if (!instructions) throw new Error("INSTRUCTIONS_REQUIRED");
   const recipeDetail = getRecipeDetail(version.recipe_id);
   if (!recipeDetail) throw new Error("NOT_FOUND");
+  const isComposite = recipeDetail.entity_kind === "COMPOSITE";
   const sourceIngredients = Array.isArray(input.ingredients) && input.ingredients.length > 0
     ? input.ingredients
     : getRecipeIngredients(versionId).map((item) => ({
@@ -2044,6 +2362,95 @@ export function updateRecipeDraft(versionId: number, input: {
         unit: item.unit,
         note: item.note || ""
       }));
+  const currentComponents = getRecipeVersionComponents(versionId);
+
+  if (isComposite) {
+    let compositeRecord: any;
+    if (input.recipe_record_json !== undefined) {
+      try {
+        compositeRecord = typeof input.recipe_record_json === "string"
+          ? JSON.parse(input.recipe_record_json)
+          : input.recipe_record_json;
+      } catch {
+        throw new Error("INVALID_RECIPE_RECORD_JSON");
+      }
+    } else if (version.recipe_record_json) {
+      try {
+        compositeRecord = JSON.parse(version.recipe_record_json);
+      } catch {
+        throw new Error("INVALID_RECIPE_RECORD_JSON");
+      }
+    }
+    if (!isCompositeRecipeRecord(compositeRecord)) {
+      throw new Error("INVALID_RECIPE_RECORD:composite.root.invalid");
+    }
+    compositeRecord.meta.dish_code = recipeDetail.code;
+    compositeRecord.meta.dish_name = recipeDetail.name;
+    compositeRecord.meta.business_type = recipeDetail.business_type;
+    compositeRecord.meta.menu_cycle = recipeDetail.recipe_type === "MENU" ? recipeDetail.menu_cycle : null;
+    if (!Array.isArray(compositeRecord.assembly_steps) || compositeRecord.assembly_steps.length < 1) {
+      compositeRecord.assembly_steps = [{ step_id: "assembly_001", step_no: 1, action: "待填写整道菜 assembly 动作" }];
+    }
+    const compositeValidation = validateCompositeRecordV3Lite(compositeRecord);
+    if (!compositeValidation.ok) {
+      throw new Error(`INVALID_RECIPE_RECORD:${compositeValidation.errors.join(",")}`);
+    }
+    const nextInstructions = compositeRecord.assembly_steps
+      .map((step: any, idx: number) => `${Number(step?.step_no || idx + 1)}. ${String(step?.action || "").trim()}`)
+      .filter(Boolean)
+      .join("\n");
+    const servingsValue = input.servings?.trim() ?? version.servings ?? "1道";
+
+    const tx = db.transaction(() => {
+      updateVersion.run(
+        servingsValue,
+        nextInstructions || "1. 待填写整道菜 assembly 动作",
+        JSON.stringify(compositeRecord),
+        input.change_note?.trim() ?? version.change_note,
+        actor.email,
+        versionId
+      );
+      deleteComponents.run(versionId);
+      const assemblyComponents = Array.isArray(compositeRecord.assembly_components) ? compositeRecord.assembly_components : [];
+      assemblyComponents.forEach((component: any, idx: number) => {
+        const componentKind = String(component?.component_kind || "REFERENCE_PREP");
+        let childRecipeId: number | null = null;
+        let childVersionId: number | null = null;
+        if (componentKind === "RECIPE_REF" && component?.child_code) {
+          const linkedRecipe = findRecipeByCode(String(component.child_code));
+          childRecipeId = linkedRecipe?.id || null;
+          childVersionId = linkedRecipe?.active_version_id || null;
+        } else {
+          const matchedExisting = currentComponents.find((item) =>
+            item.component_kind === componentKind &&
+            item.display_name === String(component?.ref_name || "")
+          );
+          childRecipeId = matchedExisting?.child_recipe_id || null;
+          childVersionId = matchedExisting?.child_version_id || null;
+        }
+        insertComponent.run(
+          versionId,
+          componentKind,
+          childRecipeId,
+          childVersionId,
+          String(component?.ref_name || component?.child_code || `component-${idx + 1}`),
+          component?.component_role ? String(component.component_role) : null,
+          component?.section ? String(component.section) : "ASSEMBLY",
+          component?.quantity ? String(component.quantity) : null,
+          component?.unit ? String(component.unit) : null,
+          Number(component?.sort_order || idx + 1),
+          Number(component?.is_optional ? 1 : 0),
+          null,
+          null
+        );
+      });
+      db.prepare("UPDATE recipes SET updated_at = datetime('now') WHERE id = ?").run(version.recipe_id);
+    });
+    tx();
+    const updated = getRecipeVersion(versionId);
+    if (!updated) throw new Error("NOT_FOUND");
+    return { ...updated, ingredients: getRecipeIngredients(versionId), components: getRecipeVersionComponents(versionId) };
+  }
 
   let recordObject: RecipeRecordV2;
   if (input.recipe_record_json !== undefined) {
@@ -2162,8 +2569,13 @@ export function submitRecipeForReview(versionId: number, actorEmail: string, cha
   } catch {
     throw new Error("INVALID_RECIPE_RECORD_JSON");
   }
-  const validation = validateRecipeRecordV2(parsedRaw);
-  if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
+  if (isCompositeRecipeRecord(parsedRaw)) {
+    const compositeValidation = validateCompositeRecordV3Lite(parsedRaw);
+    if (!compositeValidation.ok) throw new Error(`INVALID_RECIPE_RECORD:${compositeValidation.errors.join(",")}`);
+  } else {
+    const validation = validateRecipeRecordV2(parsedRaw);
+    if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
+  }
 
   db.prepare(`
     UPDATE recipe_versions
@@ -2242,6 +2654,9 @@ export function listPendingRecipeVersions() {
         rv.recipe_id,
         r.code,
         r.name,
+        r.entity_kind,
+        r.business_type,
+        r.technique_family,
         r.recipe_type,
         r.menu_cycle,
         rv.version_no,
@@ -2260,6 +2675,9 @@ export function listPendingRecipeVersions() {
       recipe_id: number;
       code: string;
       name: string;
+      entity_kind: "COMPOSITE" | "ELEMENT";
+      business_type: "MENU" | "BACKBONE";
+      technique_family: string | null;
       recipe_type: "MENU" | "BACKBONE";
       menu_cycle: string | null;
       version_no: number;
@@ -2267,6 +2685,51 @@ export function listPendingRecipeVersions() {
       created_by: string;
       change_note: string | null;
       submitted_at: string | null;
+      created_at: string;
+    }>;
+}
+
+export function listApprovedRecipeVersions() {
+  return db
+    .prepare(`
+      SELECT
+        rv.id,
+        rv.recipe_id,
+        r.code,
+        r.name,
+        r.entity_kind,
+        r.business_type,
+        r.technique_family,
+        r.recipe_type,
+        r.menu_cycle,
+        rv.version_no,
+        rv.status,
+        rv.created_by,
+        rv.change_note,
+        rv.submitted_at,
+        rv.approved_at,
+        rv.created_at
+      FROM recipe_versions rv
+      JOIN recipes r ON r.id = rv.recipe_id
+      WHERE rv.status = 'APPROVED'
+      ORDER BY rv.approved_at ASC, rv.id ASC
+    `)
+    .all() as Array<{
+      id: number;
+      recipe_id: number;
+      code: string;
+      name: string;
+      entity_kind: "COMPOSITE" | "ELEMENT";
+      business_type: "MENU" | "BACKBONE";
+      technique_family: string | null;
+      recipe_type: "MENU" | "BACKBONE";
+      menu_cycle: string | null;
+      version_no: number;
+      status: string;
+      created_by: string;
+      change_note: string | null;
+      submitted_at: string | null;
+      approved_at: string | null;
       created_at: string;
     }>;
 }

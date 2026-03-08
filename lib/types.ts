@@ -81,6 +81,9 @@ export type RecipeSummary = {
   code: string;
   name: string;
   description: string | null;
+  entity_kind: "COMPOSITE" | "ELEMENT";
+  business_type: "MENU" | "BACKBONE";
+  technique_family: string | null;
   recipe_type: "MENU" | "BACKBONE";
   menu_cycle: string | null;
   active_version_id: number | null;
@@ -109,6 +112,23 @@ export type RecipeIngredient = {
 
 export type RecipeVersionStatus = "DRAFT" | "PENDING_REVIEW" | "APPROVED" | "REJECTED" | "PUBLISHED";
 
+export type RecipeVersionComponent = {
+  id: number;
+  parent_version_id: number;
+  component_kind: "RECIPE_REF" | "REFERENCE_PREP" | "RAW_ITEM" | "FINISH_ITEM";
+  child_recipe_id: number | null;
+  child_version_id: number | null;
+  display_name: string;
+  component_role: string | null;
+  section: string;
+  quantity: string | null;
+  unit: string | null;
+  sort_order: number;
+  is_optional: number;
+  source_ref: string | null;
+  prep_note: string | null;
+};
+
 export type RecipeVersion = {
   id: number;
   recipe_id: number;
@@ -127,6 +147,7 @@ export type RecipeVersion = {
   created_at: string;
   updated_at: string;
   ingredients: RecipeIngredient[];
+  components?: RecipeVersionComponent[];
 };
 
 export type RecipeDetail = RecipeSummary & {
