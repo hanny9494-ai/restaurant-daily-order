@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: restaurant-daily-order
+    runtime: node
+    plan: starter
+    region: oregon
+    rootDir: .
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/runtime/status
+    autoDeploy: true
+    disk:
+      name: restaurant-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: RECIPES_DB_MODE
+        value: persistent
+      - key: RECIPES_DB_FILE
+        value: app.db
+      - key: L0_DB_FILE
+        value: l0_engine.db
+      - key: DASHSCOPE_BASE_URL
+        value: https://dashscope.aliyuncs.com/compatible-mode/v1
+      - key: DASHSCOPE_API_KEY
+        sync: false
+      - key: BANGWAGONG_WEBHOOK_URL
+        sync: false
+      - key: BANGWAGONG_WEBHOOK_TOKEN
+        sync: false
+

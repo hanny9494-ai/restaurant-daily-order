@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jify.local/schema/composite-record-v3-lite.json",
+  "title": "CompositeRecordV3Lite",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["meta", "production", "assembly_components", "assembly_steps"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dish_code",
+        "dish_name",
+        "display_name",
+        "aliases",
+        "entity_kind",
+        "business_type",
+        "menu_cycle",
+        "plating_image_url"
+      ],
+      "properties": {
+        "dish_code": { "type": "string", "minLength": 1 },
+        "dish_name": { "type": "string", "minLength": 1 },
+        "display_name": { "type": "string" },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "entity_kind": { "type": "string", "const": "COMPOSITE" },
+        "business_type": { "type": "string", "const": "MENU" },
+        "menu_cycle": { "type": "string", "minLength": 1 },
+        "plating_image_url": { "type": "string" }
+      }
+    },
+    "production": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serves"],
+      "properties": {
+        "serves": { "type": "string", "minLength": 1 }
+      }
+    },
+    "assembly_components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["component_kind", "ref_name", "section", "sort_order"],
+        "properties": {
+          "component_kind": {
+            "type": "string",
+            "enum": ["RECIPE_REF", "REFERENCE_PREP", "RAW_ITEM", "FINISH_ITEM"]
+          },
+          "child_code": { "type": "string", "minLength": 1 },
+          "ref_name": { "type": "string", "minLength": 1 },
+          "component_role": { "type": "string" },
+          "section": {
+            "type": "string",
+            "enum": ["PREP", "INTERMEDIATE", "ASSEMBLY", "FINISH", "PLATING"]
+          },
+          "quantity": { "type": "string" },
+          "unit": { "type": "string" },
+          "sort_order": { "type": "integer", "minimum": 0 },
+          "is_optional": { "type": "boolean" },
+          "source_ref": { "type": "string" },
+          "prep_note": { "type": "string" }
+        }
+      }
+    },
+    "assembly_steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step_id", "step_no", "action"],
+        "properties": {
+          "step_id": { "type": "string", "minLength": 1 },
+          "step_no": { "type": "integer", "minimum": 1 },
+          "action": { "type": "string", "minLength": 1 },
+          "time_sec": { "type": "number", "minimum": 0 },
+          "equipment": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

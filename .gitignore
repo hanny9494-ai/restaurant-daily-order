@@ -1,6 +1,9 @@
 # Next.js
 .next/
+.next_bad_*/
+.next_bak_*/
 out/
+tsconfig.tsbuildinfo
 
 # Node
 node_modules/
@@ -22,7 +25,19 @@ data/
 # OS/editor
 .DS_Store
 .vscode/
+scripts/__pycache__/
 
 # Codex local metadata
 .codex/
 .vercel
+
+# Generated analysis artifacts
+output/doc/
+output/l0_extract_batch1/
+output/l0_extract_batch1_final/
+output/l0_extract_batch1_reboot/
+output/l0_extract_batch1_retry/
+output/l0_extract_smoke/
+output/l0_extract_smoke2/
+output/l0_extract_verify_smoke/
+output/l0_extract_verify_smoke2/

@@ -173,3 +173,336 @@ textarea { min-height: 90px; }
     grid-template-columns: 1fr;
   }
 }
+
+/* v2.4 UI skin (from provided design language) */
+.ui24-body {
+  min-height: 100vh;
+  background: #1a1a1a;
+  color: #fff;
+}
+
+.ui24-wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 20px 16px 96px;
+}
+
+.ui24-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 1px solid #333;
+  background: rgba(26, 26, 26, 0.95);
+  backdrop-filter: blur(10px);
+}
+
+.ui24-topbar-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  height: 56px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ui24-brand {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ui24-muted {
+  color: #999;
+}
+
+.ui24-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ui24-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ui24-card {
+  background: #242424;
+  border: 1px solid #333;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.ui24-card-press:hover {
+  border-color: #4a4a4a;
+  background: #2b2b2b;
+}
+
+.ui24-title {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.ui24-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  background: #f59e0b;
+  color: #111;
+  text-decoration: none;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ui24-btn:hover {
+  background: #d97706;
+  border-color: #d97706;
+}
+
+.ui24-btn-ghost {
+  border-color: #555;
+  background: transparent;
+  color: #fff;
+}
+
+.ui24-btn-ghost:hover {
+  background: #2d2d2d;
+  border-color: #777;
+}
+
+.ui24-input,
+.ui24-select,
+.ui24-textarea {
+  width: 100%;
+  border: 1px solid #444;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #1f1f1f;
+  color: #fff;
+}
+
+.ui24-textarea {
+  min-height: 110px;
+}
+
+.ui24-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #999;
+  font-size: 13px;
+}
+
+.ui24-dropzone {
+  border: 2px dashed #555;
+  border-radius: 12px;
+  padding: 16px;
+  background: #202020;
+}
+
+.ui24-dropzone-active {
+  border-color: #f59e0b;
+  background: #2a2418;
+}
+
+.ui24-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.ui24-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #4b5563;
+  background: #1f2937;
+  color: #e5e7eb;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.ui24-pill-info {
+  border-color: #374151;
+  background: #1f2937;
+}
+
+.ui24-pill-success {
+  border-color: #14532d;
+  background: #102417;
+  color: #bbf7d0;
+}
+
+.ui24-pill-warn {
+  border-color: #92400e;
+  background: #2b1a12;
+  color: #fde68a;
+}
+
+.ui24-pill-error {
+  border-color: #7f1d1d;
+  background: #2a1111;
+  color: #fecaca;
+}
+
+.ui24-banner {
+  margin-bottom: 10px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #fff;
+  border: 1px solid #374151;
+  background: #1f2937;
+}
+
+.ui24-banner-info {
+  border-color: #374151;
+  background: #1f2937;
+}
+
+.ui24-banner-success {
+  border-color: #14532d;
+  background: #102417;
+}
+
+.ui24-banner-warn {
+  border-color: #7c2d12;
+  background: #2b1a12;
+}
+
+.ui24-banner-error {
+  border-color: #7f1d1d;
+  background: #2a1111;
+}
+
+.ui24-stat {
+  background: #171717;
+  border: 1px solid #2f2f2f;
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.ui24-listitem {
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  border: 1px solid #2f2f2f;
+  background: #111111;
+  padding: 12px 14px;
+  color: #fff;
+  cursor: pointer;
+}
+
+.ui24-listitem:hover {
+  border-color: #4b5563;
+  background: #181818;
+}
+
+.ui24-listitem-active {
+  border-color: #f59e0b;
+  background: #2a2113;
+}
+
+.ui24-taggrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ui24-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #3f3f46;
+  background: #18181b;
+  color: #e4e4e7;
+  cursor: pointer;
+}
+
+.ui24-chip:hover {
+  border-color: #71717a;
+  background: #232326;
+}
+
+.ui24-chip-active {
+  border-color: #f59e0b;
+  background: #2a2113;
+  color: #fde68a;
+}
+
+.ui24-stepcard {
+  margin-bottom: 10px;
+  border: 1px solid #2f2f2f;
+  border-radius: 14px;
+  background: #171717;
+  padding: 10px;
+}
+
+.ui24-stepbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.ui24-stepbadge {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ui24-stepcontrols {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ui24-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ui24-table th,
+.ui24-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid #353535;
+  text-align: left;
+  font-size: 14px;
+  color: #e5e5e5;
+}
+
+.ui24-table th {
+  color: #aaa;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .ui24-grid-2,
+  .ui24-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .ui24-stepbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui24-stepcontrols {
+    justify-content: flex-start;
+  }
+}

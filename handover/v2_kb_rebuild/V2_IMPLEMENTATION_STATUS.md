@@ -1,35 +1,52 @@
 # V2 Implementation Status
 
-Last Updated: 2026-03-01
-Owner: Jeff + Codex
+Last Updated: 2026-03-03  
+Owner: Jeff + Codex  
+Current Phase: `V2.5 L0-first rebuild (question-driven)`
 
 ## Goal
-Build V2 as a quality-first knowledge engine: full-book distillation, multi-layer internal KB, stable Dify service layer.
+Build a quality-first knowledge engine for `L0-L5` (with `L6` reserved for multi-cuisine mapping in V3), while keeping the current execution layer stable.
 
-## Current Snapshot
-- Distillation corpus: 49 books
-- Raw chunks: 14,343
-- Runner: `phase2_annotate_v2_2.py` + `run_annotate_autopilot.sh`
-- Auto failover: coding-plan -> payg (quota/rate limit), cooldown switch-back enabled
-- Resume: checkpoint + auto restart enabled
+## Project Summary Table
 
-## In Progress
-1. Full annotation run of all chunks
-2. Single-process monitoring and duplicate-process prevention
-3. V2 documentation consolidation and migration schedule
+| Area | Status | Progress | Latest Update | Evidence / File |
+|---|---|---:|---|---|
+| L0-L6 architecture direction | In Progress | 70% | Confirmed shift to question-driven extraction (not book-driven). | `handover/v2_kb_rebuild/L0_L5_KNOWLEDGE_LAYER_REFACTOR.md` |
+| L0 change workflow (2-3 gate approval) | Done | 100% | 3-stage flow drafted: Draft -> Review -> Publish, with conflict/evidence handling. | `handover/v2_kb_rebuild/L0_CHANGE_WORKFLOW_3_STAGE.md` |
+| Approval UI prototype | Done | 100% | Review + approve/reject/publish flow prototype completed. | `handover/v2_kb_rebuild/APPROVAL_UI_PROTOTYPE.md` |
+| Knowledge admin frontend pages | Done | 95% | `/knowledge` and `/knowledge/l0/queue` available for upload/review. | `app/knowledge/` |
+| L0 backend API | Done | 90% | Change list/detail/review/publish endpoints implemented. | `app/api/l0/` |
+| Upload + URL assist entry | Done | 85% | Upload and URL assist endpoints available for AI-assisted ingestion. | `app/api/knowledge/` |
+| Database schema (minimal + v2.5 complete) | Done | 100% | SQL drafts completed (minimal + complete schema). | `handover/v2_kb_rebuild/DB_SCHEMA_L0_L5_MINIMAL.sql`, `handover/v2_kb_rebuild/DB_SCHEMA_V25_COMPLETE.sql` |
+| Local knowledge DB engine | Done | 90% | SQLite-based engine and admin helper implemented. | `lib/l0-engine.ts`, `lib/knowledge-admin.ts` |
+| Qwen3.5 prompt + Dify contract design | Done | 100% | Prompt templates and workflow contract documented. | `handover/v2_kb_rebuild/QWEN35_PROMPTS_DIFY_WORKFLOW.md` |
+| L0 extraction script (fresh) | In Progress | 80% | New extractor built; direct SQLite ingestion works in smoke run. | `scripts/l0_extract_qwen35.py` |
+| L0 verifier layer | In Progress | 75% | Added verifier modes: `rules`, `qwen`, `auto`; waiting for stable long-run stats. | `scripts/l0_extract_qwen35.py` |
+| Batch extraction stability | Blocked | 40% | Intermittent timeout on coding-plan endpoint under certain chunk sizes. | `output/l0_extract_verify_smoke*/raw_results.jsonl` |
+| Dify deep integration (DSL rewrite) | Pending | 20% | Deferred by design until L0-L5 quality gates are stable. | `handover/v2_kb_rebuild/RUNBOOK_V2_KB_REBUILD.md` |
 
-## Done
-1. Chunking strategy updated (larger chunks to reduce token explosion)
-2. Model switched to `qwen3.5-plus`
-3. Channel switch logic implemented with separate URL/key pairs
-4. V2 complete doc updated with KB rebuild roadmap
+## What Was Completed In This Round
+1. Built end-to-end L0 admin path (upload -> review -> publish) with frontend + API.
+2. Implemented fresh Qwen3.5 extractor script (non-reuse approach as requested).
+3. Added verifier logic to extraction pipeline with status routing:
+   - `pass -> DRAFT`
+   - `need_evidence -> NEED_EVIDENCE`
+   - `reject -> skip ingest`
+4. Validated direct SQLite ingestion path to avoid HTTP 502 bottleneck in local API submission.
+5. Produced/updated runbooks and SQL specs for restartable L0 ingestion.
 
-## Risks / Blockers
-1. Long-tail API latency on first chunk can look like a stall
-2. Quality drift risk without periodic sampling
-3. Cost can spike if failover frequency is high
+## Current Risks / Blockers
+1. Endpoint timeout variance: same model may timeout depending on chunk size and response complexity.
+2. Quality risk: extraction can drift if not constrained by a fixed L0 question master.
+3. Process risk: batch runs were started/interrupted multiple times; need one frozen run protocol.
 
-## Next 3 Actions
-1. Finish full-run and export quality stats
-2. Build 4 internal functional KB views
-3. Prepare Dify import mapping and gray rollout plan
+## Decision Freeze (Before Next Batch)
+1. Extraction will follow `Question Master -> Book Mapping -> Extraction -> Triple Verification -> Ingest`.
+2. No full Dify integration work until L0 acceptance criteria are stable.
+3. No uncontrolled bulk run without quality dashboard output.
+
+## Next Actions (Ordered)
+1. Publish `L0 Question Master v1` (first 100 question rows, 12 domains).
+2. Freeze `L0 5-gate acceptance standard` and reject/need_evidence rules.
+3. Run a controlled pilot on 10-20 questions (not chapter-wide), output quality report.
+4. After pilot pass, execute batch by question set and update this status table daily.

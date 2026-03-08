@@ -10,10 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body>
-        <header className="app-header">ensue 餐厅下单系统</header>
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
