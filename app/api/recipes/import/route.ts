@@ -131,12 +131,16 @@ function pickBestDocxTextCandidate(candidates: Array<{ label: string; content: s
 
 function buildWarnings(recipes: any[]) {
   return recipes
-    .map((recipe: { meta: { recipe_type: string; menu_cycle: string | null } }, index: number) => ({
+    .map((recipe: { meta: { business_type?: string; recipe_type?: string; menu_cycle: string | null } }, index: number) => ({
       index,
       field: "menu_cycle",
       message: "MENU 类型需填写菜单周期（提交审批前）"
     }))
-    .filter((item: { index: number }) => recipes[item.index]?.meta.recipe_type === "MENU" && !recipes[item.index].meta.menu_cycle);
+    .filter((item: { index: number }) => {
+      const meta = recipes[item.index]?.meta || {};
+      const businessType = meta.business_type || meta.recipe_type;
+      return businessType === "MENU" && !meta.menu_cycle;
+    });
 }
 
 function buildReviewReasons(recipes: any[], detectedComponentsCount: number, aiParseError: string | null, extras: string[] = []) {
@@ -154,7 +158,10 @@ function buildReviewReasons(recipes: any[], detectedComponentsCount: number, aiP
   if (hasPlaceholder) {
     reviewReasons.push("部分原料/步骤为占位内容（待补充），提交前请完善。");
   }
-  const hasEmptyMenuCycle = recipes.some((recipe: any) => recipe.meta.recipe_type === "MENU" && !recipe.meta.menu_cycle);
+  const hasEmptyMenuCycle = recipes.some((recipe: any) => {
+    const businessType = recipe?.meta?.business_type || recipe?.meta?.recipe_type;
+    return businessType === "MENU" && !recipe?.meta?.menu_cycle;
+  });
   if (hasEmptyMenuCycle) {
     reviewReasons.push("存在 MENU 类型未填写菜单周期。");
   }
@@ -250,6 +257,25 @@ function normalizeCodeSeed(value: string) {
     .replace(/^_+|_+$/g, "");
 }
 
+function isPlaceholderDishCode(value: string) {
+  const normalized = normalizeCodeSeed(value);
+  return !normalized
+    || /^AUTO(_|-)PENDING/.test(normalized)
+    || /^AUTO(_|-)CONFIRM/.test(normalized)
+    || /^AUTO(_|-)FALLBACK/.test(normalized)
+    || /^AUTO(_|-)COMP/.test(normalized)
+    || /^AUTO(_|-)V3/.test(normalized)
+    || /^AUTO(_|-)IMPORT/.test(normalized);
+}
+
+function deriveDishCode(rawCode: string, dishName: string, fallback: string) {
+  const normalizedCode = normalizeCodeSeed(rawCode);
+  if (normalizedCode && !isPlaceholderDishCode(normalizedCode)) return normalizedCode;
+  const fromName = normalizeCodeSeed(dishName);
+  if (fromName) return fromName;
+  return normalizeCodeSeed(fallback) || "ITEM";
+}
+
 function stripImportLineDecorators(line: string) {
   return String(line || "")
     .replace(/^#{1,6}\s*/, "")
@@ -307,6 +333,14 @@ function extractCompositeTitle(content?: string) {
   const first = lines[0];
   const second = lines[1] || "";
   if (/^basi[ck]\s+recipes$/i.test(first)) return "";
+  const servesIndex = lines.findIndex((line) => /^serves\s+\d+/i.test(line));
+  if (servesIndex > 0) {
+    const titleLines = lines
+      .slice(0, servesIndex)
+      .filter((line) => line.length <= 80)
+      .slice(0, 3);
+    if (titleLines.length > 0) return titleLines.join(" ").trim();
+  }
   if (/^serves\s+\d+/i.test(second)) return first;
   if (/^components:?$/i.test(second)) return first;
   return "";
@@ -372,14 +406,156 @@ function extractFinishItems(content: string, knownNames: string[]) {
     }
     const normalized = line.toLowerCase();
     if (knownNormalized.some((name) => normalized.includes(name))) continue;
-    const match = line.match(/^([0-9]+(?:\.[0-9]+)?|\d+\/\d+)?\s*([A-Za-z%]+)?\s*(.+)$/);
-    const quantity = match?.[1] ? String(match[1]).trim() : "";
-    const unit = match?.[2] ? String(match[2]).trim() : "";
-    const refName = stripImportLineDecorators(match?.[3] || line);
+    let quantity = "";
+    let unit = "";
+    let refName = stripImportLineDecorators(line);
+    const quantified = line.match(/^([0-9]+(?:\.[0-9]+)?|\d+\/\d+)\s*([A-Za-z%]+)?\s+(.+)$/);
+    if (quantified) {
+      quantity = String(quantified[1] || "").trim();
+      unit = String(quantified[2] || "").trim();
+      refName = stripImportLineDecorators(quantified[3] || line);
+    }
     if (!refName || refName.length < 2) continue;
     items.push({ ref_name: refName, quantity, unit });
   }
   return items;
+}
+
+function looksLikeNonRecipeTitle(name: string) {
+  const normalized = stripImportLineDecorators(String(name || ""));
+  if (!normalized) return true;
+  if (/^(TO FINISH|TO COMPLETE)$/i.test(normalized)) return true;
+  if (/^(pinch|dash|splash)\s+of\b/i.test(normalized)) return true;
+  if (/^(pinch|dash|splash)\b/i.test(normalized)) return true;
+  if (/^(sea salt|kosher salt|salt|black pepper|white pepper|cracked black pepper)$/i.test(normalized)) return true;
+  if (/^(no_think|nothink)$/i.test(normalized)) return true;
+  if (/^\d+(?:\.\d+)?\s*(g|kg|ml|l|pcs|ea|cm|mm|oz|lb|fl oz|teaspoons?|tablespoons?|只|斤|片|根|个|份)?$/i.test(normalized)) return true;
+  return false;
+}
+
+function recipeLooksLikePlaceholderNoise(recipe: any) {
+  const name = stripImportLineDecorators(String(recipe?.meta?.dish_name || ""));
+  const technique = guessTechniqueFamily(name);
+  const ingredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
+  const steps = Array.isArray(recipe?.steps) ? recipe.steps : [];
+  const placeholderIngredientOnly = ingredients.length <= 1 && ingredients.every((item: any) => String(item?.name || "").includes("待补充"));
+  const placeholderStepOnly = steps.length <= 1 && steps.every((item: any) => /(待补充|未提供做法)/.test(String(item?.action || "")));
+  const tokenCount = name.split(/\s+/).filter(Boolean).length;
+  if (looksLikeNonRecipeTitle(name)) return true;
+  if (technique === "OTHER" && tokenCount <= 3 && placeholderIngredientOnly && placeholderStepOnly) return true;
+  return false;
+}
+
+function canonicalRecipeNameKey(name: string) {
+  return stripImportLineDecorators(String(name || ""))
+    .toLowerCase()
+    .replace(/\b(the|for|with|and|of|a|an)\b/g, " ")
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(" ");
+}
+
+function recipeRichnessScore(recipe: any) {
+  const ingredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
+  const steps = Array.isArray(recipe?.steps) ? recipe.steps : [];
+  const realIngredients = ingredients.filter((item: any) => !String(item?.name || "").includes("待补充")).length;
+  const realSteps = steps.filter((item: any) => !/(待补充|未提供做法)/.test(String(item?.action || ""))).length;
+  return realIngredients * 10 + realSteps * 20 + String(recipe?.meta?.dish_name || "").length;
+}
+
+function recipeSetQualityScore(recipes: any[]) {
+  const list = Array.isArray(recipes) ? recipes : [];
+  if (list.length < 1) return -100000;
+  const totalRichness = list.reduce((sum, recipe) => sum + recipeRichnessScore(recipe), 0);
+  const placeholderPenalty = list.reduce((sum, recipe) => {
+    const ingredientPenalty = (Array.isArray(recipe?.ingredients) ? recipe.ingredients : [])
+      .filter((item: any) => String(item?.name || "").includes("待补充")).length * 15;
+    const stepPenalty = (Array.isArray(recipe?.steps) ? recipe.steps : [])
+      .filter((item: any) => /(待补充|未提供做法)/.test(String(item?.action || ""))).length * 25;
+    return sum + ingredientPenalty + stepPenalty;
+  }, 0);
+  const namedRecipeBonus = list.filter((recipe) => String(recipe?.meta?.dish_name || "").trim()).length * 8;
+  return totalRichness + namedRecipeBonus - placeholderPenalty;
+}
+
+function inferImportMode(content: string, recipes: any[]) {
+  const normalizedRecipes = Array.isArray(recipes) ? recipes : [];
+  const title = extractCompositeTitle(content);
+  const hasComponents = /(^|\n)Components:\s*$/im.test(String(content || ""));
+  const hasServes = /(^|\n)Serves\s+\d+/im.test(String(content || ""));
+  const hasFinish = /(TO FINISH|TO COMPLETE)/i.test(String(content || ""));
+  const isBasicLibrary = /^BASIC\s+RECIPES\b/im.test(String(content || "")) || (!title && !hasComponents && !hasServes && !hasFinish && normalizedRecipes.length >= 2);
+  return isBasicLibrary
+    ? "ELEMENT_LIBRARY"
+    : (title || hasComponents || hasFinish || (hasServes && normalizedRecipes.length >= 2))
+      ? "COMPOSITE"
+      : (normalizedRecipes.length === 1 ? "SINGLE_ELEMENT" : "ELEMENT_LIBRARY");
+}
+
+function sanitizeImportedRecipes(recipes: any[], content?: string) {
+  const normalizedRecipes = Array.isArray(recipes) ? recipes : [];
+  if (normalizedRecipes.length < 1) return [];
+  const finishNames = new Set(
+    extractFinishItems(String(content || ""), [])
+      .map((item) => stripImportLineDecorators(item.ref_name).toLowerCase())
+      .filter(Boolean)
+  );
+  const filtered = normalizedRecipes.filter((recipe: any) => {
+    const name = stripImportLineDecorators(String(recipe?.meta?.dish_name || ""));
+    if (!name) return false;
+    if (recipeLooksLikePlaceholderNoise(recipe)) return false;
+    if (finishNames.has(name.toLowerCase())) return false;
+    return true;
+  });
+  const deduped = new Map<string, any>();
+  for (const recipe of filtered) {
+    const key = canonicalRecipeNameKey(String(recipe?.meta?.dish_name || ""));
+    if (!key) continue;
+    const existing = deduped.get(key);
+    if (!existing || recipeRichnessScore(recipe) > recipeRichnessScore(existing)) {
+      deduped.set(key, recipe);
+    }
+  }
+  return Array.from(deduped.values());
+}
+
+function applyImportedRecipeDefaults(recipes: any[], content?: string) {
+  const mode = inferImportMode(String(content || ""), recipes);
+  return recipes.map((recipe: any, index: number) => {
+    const normalized = normalizeRecipe(recipe, index);
+    const currentBusinessType = String(normalized?.meta?.business_type || "").trim();
+    let businessType = currentBusinessType === "MENU" || currentBusinessType === "BACKBONE"
+      ? currentBusinessType
+      : "BACKBONE";
+
+    if (mode === "ELEMENT_LIBRARY") {
+      businessType = "BACKBONE";
+    } else if (mode === "SINGLE_ELEMENT") {
+      const hasServes = /(^|\n)Serves\s+\d+/im.test(String(content || ""));
+      const title = extractCompositeTitle(content);
+      businessType = hasServes || title ? "MENU" : "BACKBONE";
+    } else if (mode === "COMPOSITE") {
+      if (businessType !== "BACKBONE") {
+        businessType = "MENU";
+      }
+    }
+
+    const menuCycle = businessType === "MENU"
+      ? (normalizeCodeSeed(String(normalized?.meta?.menu_cycle || "")) || "AUTO_IMPORT")
+      : null;
+
+    return {
+      ...normalized,
+      meta: {
+        ...normalized.meta,
+        business_type: businessType,
+        menu_cycle: menuCycle
+      }
+    };
+  });
 }
 
 function buildV3Preview(recipes: any[], content?: string, parseMethod?: string) {
@@ -398,14 +574,9 @@ function buildV3Preview(recipes: any[], content?: string, parseMethod?: string) 
   const knownNames = normalizedRecipes.map((recipe: any) => String(recipe?.meta?.dish_name || "").trim()).filter(Boolean);
   const title = extractCompositeTitle(content);
   const hasComponents = /(^|\n)Components:\s*$/im.test(String(content || ""));
-  const hasServes = /(^|\n)Serves\s+\d+/im.test(String(content || ""));
   const hasFinish = /(TO FINISH|TO COMPLETE)/i.test(String(content || ""));
-  const isBasicLibrary = /^BASIC\s+RECIPES\b/im.test(String(content || "")) || (!title && !hasComponents && !hasServes && !hasFinish && normalizedRecipes.length >= 2);
-  const mode = isBasicLibrary
-    ? "ELEMENT_LIBRARY"
-    : (title || hasComponents || hasFinish || (hasServes && normalizedRecipes.length >= 2))
-      ? "COMPOSITE"
-      : (normalizedRecipes.length === 1 ? "SINGLE_ELEMENT" : "ELEMENT_LIBRARY");
+  const mode = inferImportMode(String(content || ""), normalizedRecipes);
+  const isBasicLibrary = mode === "ELEMENT_LIBRARY";
   const sourcePattern = hasComponents
     ? "components_mode"
     : /FOR THE /i.test(String(content || ""))
@@ -419,16 +590,17 @@ function buildV3Preview(recipes: any[], content?: string, parseMethod?: string) 
     const role = guessComponentRole(recipe);
     const businessType = mode === "ELEMENT_LIBRARY"
       ? "BACKBONE"
-      : String(recipe?.meta?.recipe_type || "BACKBONE");
+      : String(recipe?.meta?.business_type || recipe?.meta?.recipe_type || "BACKBONE");
+    const dishName = String(recipe?.meta?.dish_name || "");
     return {
       index,
-      dish_code: String(recipe?.meta?.dish_code || `AUTO-V3-${index + 1}`),
-      dish_name: String(recipe?.meta?.dish_name || ""),
-      display_name: String(recipe?.meta?.dish_name || ""),
+      dish_code: deriveDishCode(String(recipe?.meta?.dish_code || ""), dishName, `ELEMENT_${index + 1}`),
+      dish_name: dishName,
+      display_name: dishName,
       aliases: [],
       entity_kind: "ELEMENT",
       business_type: businessType,
-      technique_family: guessTechniqueFamily(String(recipe?.meta?.dish_name || "")),
+      technique_family: guessTechniqueFamily(dishName),
       component_role: role.role,
       section: role.section
     };
@@ -439,7 +611,7 @@ function buildV3Preview(recipes: any[], content?: string, parseMethod?: string) 
     ref_name: item.ref_name,
     source_ref: item.source_ref
   }));
-  const finishItems = extractFinishItems(String(content || ""), knownNames).map((item, index) => ({
+  const finishItems = extractFinishItems(String(content || ""), []).map((item, index) => ({
     id: `finish_${index + 1}`,
     component_kind: "FINISH_ITEM",
     ref_name: item.ref_name,
@@ -454,30 +626,31 @@ function buildV3Preview(recipes: any[], content?: string, parseMethod?: string) 
       component_role: element.component_role,
       section: element.section,
       sort_order: index + 1
-    })),
-    ...finishItems.map((item, index) => ({
-      component_kind: "FINISH_ITEM" as const,
-      ref_name: item.ref_name,
-      component_role: "PLATING",
-      section: "PLATING",
-      quantity: item.quantity,
-      unit: item.unit,
-      sort_order: elements.length + index + 1
     }))
   ];
 
   const composite = mode === "COMPOSITE"
-    ? {
+    ? (() => {
+        const extractedAssemblySteps = extractAssemblySteps(content);
+        const fallbackAssemblySteps = extractedAssemblySteps.length > 0
+          ? extractedAssemblySteps
+          : [{
+              step_id: "assembly_001",
+              step_no: 1,
+              action: "按出品顺序组合所有 elements 并完成最终装盘。"
+            }];
+        return {
         dish_code: normalizeCodeSeed(title || `AUTO_COMPOSITE_${normalizedRecipes[0]?.meta?.dish_name || "ITEM"}`),
         dish_name: title || String(normalizedRecipes[0]?.meta?.dish_name || "Composite Dish"),
         display_name: title || String(normalizedRecipes[0]?.meta?.dish_name || "Composite Dish"),
         aliases: [],
         entity_kind: "COMPOSITE",
         business_type: "MENU",
-        menu_cycle: normalizedRecipes.find((recipe: any) => recipe?.meta?.recipe_type === "MENU")?.meta?.menu_cycle || null,
+        menu_cycle: normalizedRecipes.find((recipe: any) => (recipe?.meta?.business_type || recipe?.meta?.recipe_type) === "MENU")?.meta?.menu_cycle || "AUTO_IMPORT",
         assembly_components: assemblyComponents,
-        assembly_steps: extractAssemblySteps(content)
-      }
+        assembly_steps: fallbackAssemblySteps
+      };
+      })()
     : null;
 
   return {
@@ -1003,19 +1176,23 @@ function capRecipes(recipes: any[], maxCount = 20) {
 }
 
 function normalizeRecipe(raw: any, idx: number) {
-  const recipeType = raw?.meta?.recipe_type === "BACKBONE" ? "BACKBONE" : "MENU";
+  const businessType = raw?.meta?.business_type === "BACKBONE" || raw?.meta?.recipe_type === "BACKBONE" ? "BACKBONE" : "MENU";
   return {
     meta: {
-      dish_code: String(raw?.meta?.dish_code || `AUTO-PENDING-${idx + 1}`),
+      dish_code: deriveDishCode(
+        String(raw?.meta?.dish_code || ""),
+        String(raw?.meta?.dish_name || "").trim(),
+        `ELEMENT_${idx + 1}`
+      ),
       dish_name: String(raw?.meta?.dish_name || "").trim(),
-      recipe_type: recipeType,
-      menu_cycle: recipeType === "MENU"
+      business_type: businessType,
+      menu_cycle: businessType === "MENU"
         ? (typeof raw?.meta?.menu_cycle === "string" && raw.meta.menu_cycle.trim() ? raw.meta.menu_cycle.trim() : null)
         : null,
       plating_image_url: String(raw?.meta?.plating_image_url || "")
     },
     production: {
-      servings: String(raw?.production?.servings || "1份"),
+      yield: String(raw?.production?.yield || raw?.production?.servings || "1份"),
       net_yield_rate: Number.isFinite(Number(raw?.production?.net_yield_rate))
         ? Number(raw.production.net_yield_rate) || 1
         : 1,
@@ -1063,7 +1240,8 @@ async function importFromPreparedText(content: string, options?: {
     deterministicParseMethod
   });
   if (deterministic.length >= 2 || (parsed.hasComponentsHeader && deterministic.length >= 1)) {
-    const enrichedRecipes = enrichRecipesWithSuggestions(deterministic);
+    const cleanedRecipes = applyImportedRecipeDefaults(sanitizeImportedRecipes(deterministic, normalized), normalized);
+    const enrichedRecipes = enrichRecipesWithSuggestions(cleanedRecipes);
     const warnings = buildWarnings(enrichedRecipes);
     const extras = options?.deterministicReason ? [options.deterministicReason] : [];
     const reviewReasons = buildReviewReasons(enrichedRecipes, parsed.components.length, null, extras);
@@ -1110,14 +1288,25 @@ async function importFromPreparedText(content: string, options?: {
   const componentRecipes = componentParsed.recipes;
   const detectedComponentsCount = componentParsed.components.length;
   const fallbackRecipes = parseRecipesFromTextFallback(normalized);
-  if (componentRecipes.length >= 2) {
-    recipes = componentRecipes;
-  } else if (componentRecipes.length > recipes.length) {
-    recipes = componentRecipes;
-  } else if (recipes.length < 1 || fallbackRecipes.length > recipes.length) {
-    recipes = fallbackRecipes;
-  }
-  recipes = enrichRecipesWithSuggestions(capRecipes(recipes, 20));
+  const candidateSets = [
+    { key: "ai", recipes },
+    { key: "component", recipes: componentRecipes },
+    { key: "fallback", recipes: fallbackRecipes }
+  ].map((item) => {
+    const cleaned = capRecipes(
+      applyImportedRecipeDefaults(
+        sanitizeImportedRecipes(item.recipes, normalized),
+        normalized
+      ),
+      20
+    );
+    const enriched = enrichRecipesWithSuggestions(cleaned);
+    let score = recipeSetQualityScore(enriched);
+    if (item.key === "component" && componentParsed.hasComponentsHeader) score += 40;
+    return { ...item, recipes: enriched, score };
+  });
+  candidateSets.sort((a, b) => b.score - a.score);
+  recipes = candidateSets[0]?.recipes || [];
   const warnings = buildWarnings(recipes);
   const reviewReasons = buildReviewReasons(recipes, detectedComponentsCount, aiParseError, options?.extraReasons || []);
   return {
@@ -1175,7 +1364,7 @@ async function importFromPreparedVision(imageBase64: string, options?: {
       .filter((item: { meta: { dish_name: string } }) => item.meta.dish_name),
     20
   );
-  const enrichedRecipes = enrichRecipesWithSuggestions(recipes);
+  const enrichedRecipes = enrichRecipesWithSuggestions(applyImportedRecipeDefaults(sanitizeImportedRecipes(recipes), undefined));
   const warnings = buildWarnings(enrichedRecipes);
   const reviewReasons = buildReviewReasons(enrichedRecipes, 0, null, options?.extraReasons || []);
   return {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRecipeDetail, updateRecipeBase } from "@/lib/db";
+import { deleteRecipeRepo, getRecipeDetailRepo, updateRecipeBaseRepo } from "@/lib/recipe-repo";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export async function GET(_request: Request, context: { params: { id: string } }
   if (!Number.isInteger(recipeId) || recipeId <= 0) {
     return NextResponse.json({ error: "INVALID_ID" }, { status: 400 });
   }
-  const detail = getRecipeDetail(recipeId);
+  const detail = await getRecipeDetailRepo(recipeId);
   if (!detail) {
     return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
   }
@@ -37,11 +37,20 @@ export async function PATCH(request: Request, context: { params: { id: string } 
   }
   try {
     const body = await request.json();
-    const detail = updateRecipeBase(recipeId, {
+    const detail = await updateRecipeBaseRepo(recipeId, {
       code: typeof body.code === "string" ? body.code : undefined,
       name: typeof body.name === "string" ? body.name : undefined,
       description: typeof body.description === "string" ? body.description : undefined,
-      recipe_type: body.recipe_type === "MENU" ? "MENU" : (body.recipe_type === "BACKBONE" ? "BACKBONE" : undefined),
+      business_type:
+        body.business_type === "MENU"
+          ? "MENU"
+          : body.business_type === "BACKBONE"
+            ? "BACKBONE"
+            : body.recipe_type === "MENU"
+              ? "MENU"
+              : body.recipe_type === "BACKBONE"
+                ? "BACKBONE"
+                : undefined,
       menu_cycle: typeof body.menu_cycle === "string" ? body.menu_cycle : undefined,
       actor: String(body.actor || "")
     });
@@ -58,5 +67,39 @@ export async function PATCH(request: Request, context: { params: { id: string } 
       return NextResponse.json({ error: code }, { status: 403 });
     }
     return NextResponse.json({ error: "UPDATE_RECIPE_FAILED" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request, context: { params: { id: string } }) {
+  if (!hasPersistentRecipeStore()) {
+    return NextResponse.json({
+      error: "PERSISTENT_DB_REQUIRED",
+      message: "当前环境是临时数据库，不能稳定删除食谱。请切换到持久数据库环境后重试。"
+    }, { status: 409 });
+  }
+  const recipeId = Number(context.params.id);
+  if (!Number.isInteger(recipeId) || recipeId <= 0) {
+    return NextResponse.json({ error: "INVALID_ID" }, { status: 400 });
+  }
+  try {
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+    const data = await deleteRecipeRepo(recipeId, {
+      actor: String(body.actor || body.actor_email || "")
+    });
+    return NextResponse.json({ data });
+  } catch (error: any) {
+    const code = String(error?.message || "");
+    if (code === "NOT_FOUND") {
+      return NextResponse.json({ error: code }, { status: 404 });
+    }
+    if (code === "PERMISSION_DENIED" || code === "USER_NOT_FOUND" || code === "ACTOR_REQUIRED") {
+      return NextResponse.json({ error: code }, { status: 403 });
+    }
+    return NextResponse.json({ error: "DELETE_RECIPE_FAILED" }, { status: 500 });
   }
 }

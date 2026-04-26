@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { reviewRecipeVersion } from "@/lib/db";
+import { reviewRecipeVersionRepo } from "@/lib/recipe-repo";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest, context: { params: { versionId:
     const body = await request.json();
     const decisionRaw = String(body.decision || "").toLowerCase();
     const decision = decisionRaw === "approve" ? "approve" : "reject";
-    const data = reviewRecipeVersion(versionId, String(body.reviewer || ""), decision, body.review_note);
+    const data = await reviewRecipeVersionRepo(versionId, String(body.reviewer || ""), decision, body.review_note);
     return NextResponse.json({ data });
   } catch (error: any) {
     const code = String(error?.message || "");

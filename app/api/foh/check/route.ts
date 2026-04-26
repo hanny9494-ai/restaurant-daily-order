@@ -25,10 +25,15 @@ export async function POST(request: NextRequest) {
     if (!guard.allowed) {
       return NextResponse.json({ error: guard.error || "FORBIDDEN" }, { status: 403 });
     }
+    const menuCycle = typeof body.menu_cycle === "string" ? body.menu_cycle.trim() : "";
     const menuRecipeIds = Array.isArray(body.menu_recipe_ids)
       ? body.menu_recipe_ids.map((id: unknown) => Number(id)).filter((id: number) => Number.isInteger(id) && id > 0)
       : [];
-    const catalog = getFohCheckCatalog({ date: serviceDate, recipe_ids: menuRecipeIds });
+    const catalog = getFohCheckCatalog({
+      date: serviceDate,
+      recipe_ids: menuRecipeIds,
+      menu_cycle: menuCycle || undefined
+    });
     const prompt = buildFohCheckPrompt({
       menu: catalog,
       restrictions: restrictions.join("，")
@@ -55,6 +60,7 @@ export async function POST(request: NextRequest) {
         table_no: typeof body.table_no === "string" ? body.table_no : "",
         restrictions,
         menu_recipe_ids: menuRecipeIds,
+        menu_cycle: menuCycle || undefined,
         created_by: actorEmail
       });
       result = {

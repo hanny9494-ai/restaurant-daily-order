@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listApprovedRecipeVersions, listPendingRecipeVersions } from "@/lib/db";
+import { listApprovedRecipeVersionsRepo, listPendingRecipeVersionsRepo } from "@/lib/recipe-repo";
 
 export const dynamic = "force-dynamic";
 export const preferredRegion = "hkg1";
@@ -8,8 +8,8 @@ export async function GET() {
   return NextResponse.json(
     {
       data: {
-        pending: listPendingRecipeVersions(),
-        approved: listApprovedRecipeVersions()
+        pending: await listPendingRecipeVersionsRepo(),
+        approved: await listApprovedRecipeVersionsRepo()
       }
     },
     {

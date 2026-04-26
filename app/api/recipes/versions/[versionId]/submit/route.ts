@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { submitRecipeForReview } from "@/lib/db";
+import { submitRecipeForReviewRepo } from "@/lib/recipe-repo";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest, context: { params: { versionId:
   }
   try {
     const body = await request.json();
-    const data = submitRecipeForReview(
+    const data = await submitRecipeForReviewRepo(
       versionId,
       String(body.actor_email || body.actor || ""),
       typeof body.change_note === "string" ? body.change_note : undefined

@@ -4,7 +4,11 @@ export async function pushRecipeToBangwagong(input: {
   event: "RECIPE_PUBLISHED" | "RECIPE_APPROVED";
 }) {
   const endpoint = (process.env.BANGWAGONG_WEBHOOK_URL || "").trim();
-  const token = (process.env.BANGWAGONG_API_TOKEN || "").trim();
+  const token = (
+    process.env.BANGWAGONG_API_TOKEN ||
+    process.env.BANGWAGONG_WEBHOOK_TOKEN ||
+    ""
+  ).trim();
 
   if (!endpoint) {
     return {

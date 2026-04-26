@@ -5,12 +5,31 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 type Message = {
   role: "user" | "assistant";
   content: string;
+  metaLabel?: string;
 };
+
+type ChatMode = "single" | "multi_agent";
+
+type ChatMeta = {
+  mode?: ChatMode;
+  provider?: string;
+  agents?: string[];
+};
+
+function formatAssistantLabel(meta?: ChatMeta) {
+  if (!meta?.provider) return "Jify";
+  if (meta.mode === "multi_agent") {
+    const count = Array.isArray(meta.agents) ? meta.agents.length : 0;
+    return count > 0 ? `MCP · ${count} agents` : "MCP · Multi-Agent";
+  }
+  return meta.provider === "mcp" ? "MCP" : "Jify";
+}
 
 export default function ChatbotPage() {
   const [conversationId, setConversationId] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [mode, setMode] = useState<ChatMode>("multi_agent");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const chatRef = useRef<HTMLDivElement>(null);
@@ -34,6 +53,8 @@ export default function ChatbotPage() {
     const query = input.trim();
     if (!query || loading) return;
 
+    const history = messages.map(({ role, content }) => ({ role, content }));
+
     setError("");
     setLoading(true);
     setInput("");
@@ -43,7 +64,12 @@ export default function ChatbotPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, conversationId }),
+        body: JSON.stringify({
+          query,
+          conversationId,
+          mode,
+          messages: history
+        }),
       });
 
       const json = await res.json();
@@ -53,7 +79,14 @@ export default function ChatbotPage() {
       }
 
       if (json?.conversationId) setConversationId(json.conversationId);
-      setMessages((prev) => [...prev, { role: "assistant", content: json.answer || "" }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: json.answer || "",
+          metaLabel: formatAssistantLabel(json?.meta)
+        }
+      ]);
     } catch {
       setError("网络错误，请稍后重试");
     } finally {
@@ -197,6 +230,28 @@ export default function ChatbotPage() {
           padding: 12px 0 28px;
           flex-shrink: 0;
         }
+        .jify-mode-switch {
+          display: inline-flex;
+          gap: 6px;
+          padding: 4px;
+          border-radius: 999px;
+          background: #27272f;
+          margin-bottom: 10px;
+        }
+        .jify-mode-btn {
+          border: none;
+          background: transparent;
+          color: #8e8ea0;
+          padding: 7px 12px;
+          border-radius: 999px;
+          font-size: 12px;
+          cursor: pointer;
+          transition: background 0.2s, color 0.2s;
+        }
+        .jify-mode-btn.active {
+          background: #ececec;
+          color: #212121;
+        }
         .jify-input-box {
           background: #2f2f2f;
           border-radius: 16px;
@@ -257,19 +312,20 @@ export default function ChatbotPage() {
               <div className="jify-tip">描述你想研发的菜品，Jify 会引导你一步步把它想清楚</div>
               <div className="jify-tip">每轮对话推进一个研发阶段：结构 → 风味 → 科学 → 技法 → 感官</div>
               <div className="jify-tip">支持中文和英文输入，Jify 会用相同语言回答</div>
+              <div className="jify-tip">当前聊天后端可切到 MCP 单工具或 MCP 多 Agent 工具</div>
             </div>
           </>
         ) : (
           <div className="jify-chat" ref={chatRef}>
             {messages.map((msg, idx) => (
               <div key={idx} className={`jify-msg ${msg.role}`}>
-                <div className="jify-label">{msg.role === "user" ? "你" : "Jify"}</div>
+                <div className="jify-label">{msg.role === "user" ? "你" : msg.metaLabel || "Jify"}</div>
                 <div className="jify-bubble">{msg.content}</div>
               </div>
             ))}
             {loading && (
               <div className="jify-msg assistant">
-                <div className="jify-label">Jify</div>
+                <div className="jify-label">{mode === "multi_agent" ? "MCP · Multi-Agent" : "MCP"}</div>
                 <div className="jify-typing">
                   <span /><span /><span />
                 </div>
@@ -280,6 +336,24 @@ export default function ChatbotPage() {
 
         <div className="jify-input-area">
           {error && <div className="jify-error">{error}</div>}
+          <div className="jify-mode-switch">
+            <button
+              type="button"
+              className={`jify-mode-btn ${mode === "multi_agent" ? "active" : ""}`}
+              onClick={() => setMode("multi_agent")}
+              disabled={loading}
+            >
+              多 Agent
+            </button>
+            <button
+              type="button"
+              className={`jify-mode-btn ${mode === "single" ? "active" : ""}`}
+              onClick={() => setMode("single")}
+              disabled={loading}
+            >
+              单模型
+            </button>
+          </div>
           <form onSubmit={onSubmit}>
             <div className="jify-input-box">
               <textarea
@@ -288,7 +362,11 @@ export default function ChatbotPage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="描述你想做的菜，比如「我想做一道以松露为主角的冷前菜」..."
+                placeholder={
+                  mode === "multi_agent"
+                    ? "描述目标，MCP 多 Agent 工具会拆解并汇总..."
+                    : "描述你想做的菜，比如「我想做一道以松露为主角的冷前菜」..."
+                }
                 disabled={loading}
                 rows={1}
               />

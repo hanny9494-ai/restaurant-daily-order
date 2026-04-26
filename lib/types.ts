@@ -84,7 +84,7 @@ export type RecipeSummary = {
   entity_kind: "COMPOSITE" | "ELEMENT";
   business_type: "MENU" | "BACKBONE";
   technique_family: string | null;
-  recipe_type: "MENU" | "BACKBONE";
+  recipe_type?: "MENU" | "BACKBONE";
   menu_cycle: string | null;
   active_version_id: number | null;
   active_version_no: number | null;
@@ -134,7 +134,8 @@ export type RecipeVersion = {
   recipe_id: number;
   version_no: number;
   status: RecipeVersionStatus;
-  servings: string | null;
+  yield: string | null;
+  servings?: string | null;
   instructions: string;
   change_note: string | null;
   recipe_record_json: string | null;

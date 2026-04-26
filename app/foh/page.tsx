@@ -29,6 +29,8 @@ type MenuResponse = {
     source: string;
     items: MenuItem[];
   } | null;
+  selected_menu_cycle?: string | null;
+  available_menu_cycles?: string[];
   available_recipes: Array<{ id: number; dish_name: string; type: string }>;
 };
 
@@ -57,7 +59,7 @@ export default function FohPage() {
   const [selectedUser, setSelectedUser] = useState("");
   const [restrictionsText, setRestrictionsText] = useState("");
   const [menuData, setMenuData] = useState<MenuResponse | null>(null);
-  const [appendRecipeId, setAppendRecipeId] = useState<number | null>(null);
+  const [selectedMenuCycle, setSelectedMenuCycle] = useState("");
   const [result, setResult] = useState<CheckResult | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -73,12 +75,14 @@ export default function FohPage() {
     }
   }
 
-  async function loadMenu(date = serviceDate) {
-    const res = await fetch(`${apiBase}/api/foh/menu?date=${encodeURIComponent(date)}`);
+  async function loadMenu(date = serviceDate, menuCycle = selectedMenuCycle) {
+    const params = new URLSearchParams({ date });
+    if (menuCycle) params.set("menu_cycle", menuCycle);
+    const res = await fetch(`${apiBase}/api/foh/menu?${params.toString()}`);
     const json = await res.json();
     setMenuData(json as MenuResponse);
-    if (!appendRecipeId) {
-      setAppendRecipeId(Number(json?.available_recipes?.[0]?.id || 0) || null);
+    if (!selectedMenuCycle && json?.selected_menu_cycle) {
+      setSelectedMenuCycle(String(json.selected_menu_cycle));
     }
   }
 
@@ -93,53 +97,10 @@ export default function FohPage() {
   }, []);
 
   useEffect(() => {
-    loadMenu(serviceDate);
+    loadMenu(serviceDate, selectedMenuCycle);
     loadHistory(serviceDate);
     setResult(null);
-  }, [serviceDate]);
-
-  async function addMenuItem() {
-    if (!appendRecipeId || !selectedUser) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/foh/menu/items`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: serviceDate,
-          recipe_id: appendRecipeId,
-          actor_email: selectedUser
-        })
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(`添加菜单失败: ${json.error || "UNKNOWN_ERROR"}`);
-        return;
-      }
-      setMenuData(json as MenuResponse);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function removeMenuItem(itemId: number) {
-    setLoading(true);
-    try {
-      const res = await fetch(`${apiBase}/api/foh/menu/items/${itemId}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actor_email: selectedUser })
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(`移除菜单失败: ${json.error || "UNKNOWN_ERROR"}`);
-        return;
-      }
-      setMenuData(json as MenuResponse);
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [serviceDate, selectedMenuCycle]);
 
   async function runCheck() {
     const restrictions = restrictionsText
@@ -163,6 +124,7 @@ export default function FohPage() {
           guest_name: guestName,
           table_no: tableNo,
           restrictions,
+          menu_cycle: selectedMenuCycle,
           menu_recipe_ids: menuIds,
           actor_email: selectedUser
         })
@@ -190,7 +152,7 @@ export default function FohPage() {
       </div>
 
       <section className="card">
-        <h2>当日菜单配置</h2>
+        <h2>当季菜单选择</h2>
         <div className="grid">
           <div className="field">
             <label>服务日期</label>
@@ -207,15 +169,17 @@ export default function FohPage() {
         </div>
 
         <div className="row" style={{ marginTop: 10 }}>
-          <select value={appendRecipeId ?? ""} onChange={(e) => setAppendRecipeId(e.target.value ? Number(e.target.value) : null)} style={{ maxWidth: 320 }}>
-            <option value="">选择菜品加入今日菜单</option>
-            {(menuData?.available_recipes || []).map((recipe) => (
-              <option key={recipe.id} value={recipe.id}>{recipe.dish_name} / {recipe.type}</option>
+          <select value={selectedMenuCycle} onChange={(e) => setSelectedMenuCycle(e.target.value)} style={{ maxWidth: 360 }}>
+            <option value="">选择菜单周期</option>
+            {(menuData?.available_menu_cycles || []).map((cycle) => (
+              <option key={cycle} value={cycle}>{cycle}</option>
             ))}
           </select>
-          <button className="btn" type="button" onClick={addMenuItem} disabled={loading || !appendRecipeId}>添加菜品</button>
-          <button className="btn secondary" type="button" onClick={() => loadMenu(serviceDate)}>刷新菜单</button>
+          <button className="btn secondary" type="button" onClick={() => loadMenu(serviceDate, selectedMenuCycle)}>刷新菜单</button>
         </div>
+        <p className="muted" style={{ marginTop: 8 }}>
+          前厅只能选择当前菜单，不再手动增删菜单内菜品。菜单内容由研发/后厨端统一维护。
+        </p>
 
         {(menuData?.menu?.items?.length || 0) > 0 ? (
           <table className="table" style={{ marginTop: 10 }}>
@@ -223,7 +187,6 @@ export default function FohPage() {
               <tr>
                 <th>菜品</th>
                 <th>原料数</th>
-                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -231,15 +194,12 @@ export default function FohPage() {
                 <tr key={item.item_id}>
                   <td>{item.dish_name}</td>
                   <td>{item.ingredients?.length || 0}</td>
-                  <td>
-                    <button className="btn danger" type="button" onClick={() => removeMenuItem(item.item_id)} disabled={loading}>移除</button>
-                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <p className="muted" style={{ marginTop: 8 }}>当天还没有配置菜单，先从上方添加菜品。</p>
+          <p className="muted" style={{ marginTop: 8 }}>当前没有可用菜单。先在食谱系统里给整道菜设置菜单周期。</p>
         )}
       </section>
 

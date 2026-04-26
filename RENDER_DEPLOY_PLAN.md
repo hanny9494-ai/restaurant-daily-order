@@ -89,3 +89,8 @@
    - 审批
    - 发布
 
+## 执行清单
+
+正式上线前，请按这份清单逐项核对：
+
+- [RENDER_GO_LIVE_CHECKLIST.md](/Users/jeff/Documents/New%20project/RENDER_GO_LIVE_CHECKLIST.md)

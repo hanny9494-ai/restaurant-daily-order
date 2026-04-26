@@ -8,7 +8,8 @@ export const preferredRegion = "hkg1";
 export async function GET(request: NextRequest) {
   try {
     const date = String(request.nextUrl.searchParams.get("date") || todayString());
-    const data = getFohMenuByDate(date);
+    const menuCycle = String(request.nextUrl.searchParams.get("menu_cycle") || "").trim();
+    const data = getFohMenuByDate(date, menuCycle || undefined);
     return NextResponse.json({
       success: true,
       ...data

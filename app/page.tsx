@@ -39,12 +39,12 @@ export default function HomePage() {
               <div className="ui24-muted">AI 识别来货单并入库</div>
             </Link>
             <Link href="/recipes" className="ui24-card ui24-card-press" style={{ textDecoration: "none", color: "inherit" }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>导入食谱</div>
-              <div className="ui24-muted">支持拖拽上传和文本解析</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>录入工作台</div>
+              <div className="ui24-muted">导入、修改子配方、组装菜式都在这里</div>
             </Link>
             <Link href="/recipes/view" className="ui24-card ui24-card-press" style={{ textDecoration: "none", color: "inherit" }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>查看/修改食谱</div>
-              <div className="ui24-muted">表格查看，在线修改并审批</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>查看菜谱</div>
+              <div className="ui24-muted">以整道菜为主的只读查看页</div>
             </Link>
             <Link href="/foh" className="ui24-card ui24-card-press" style={{ textDecoration: "none", color: "inherit" }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>前厅忌口端口</div>

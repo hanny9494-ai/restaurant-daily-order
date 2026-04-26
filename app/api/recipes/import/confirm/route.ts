@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createImportedRecipeDrafts } from "@/lib/db";
+import { createImportedRecipeDraftsRepo, submitRecipeForReviewRepo } from "@/lib/recipe-repo";
 import { requirePermission } from "@/lib/permissions";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
@@ -10,8 +10,11 @@ type DraftItem = {
   dish_name: string;
   dish_code?: string;
   recipe_type?: "MENU" | "BACKBONE";
+  business_type?: "MENU" | "BACKBONE";
+  technique_family?: string;
   menu_cycle?: string | null;
   plating_image_url?: string;
+  yield?: string;
   servings?: string;
   net_yield_rate?: number;
   allergens?: string[];
@@ -20,18 +23,51 @@ type DraftItem = {
   steps?: Array<{ step_no?: number; action: string; time_sec?: number; temp_c?: number; ccp?: string; note?: string }>;
 };
 
+function normalizeCodeSeed(value: string) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isPlaceholderDishCode(value: string) {
+  const normalized = normalizeCodeSeed(value);
+  return !normalized
+    || /^AUTO(_|-)PENDING/.test(normalized)
+    || /^AUTO(_|-)CONFIRM/.test(normalized)
+    || /^AUTO(_|-)FALLBACK/.test(normalized)
+    || /^AUTO(_|-)COMP/.test(normalized)
+    || /^AUTO(_|-)V3/.test(normalized)
+    || /^AUTO(_|-)IMPORT/.test(normalized);
+}
+
+function deriveDishCode(rawCode: string, dishName: string, fallback: string) {
+  const normalizedCode = normalizeCodeSeed(rawCode);
+  if (normalizedCode && !isPlaceholderDishCode(normalizedCode)) return normalizedCode;
+  const fromName = normalizeCodeSeed(dishName);
+  if (fromName) return fromName;
+  return normalizeCodeSeed(fallback) || "ITEM";
+}
+
 function toRecipeRecord(item: DraftItem, index: number) {
-  const recipeType = item.recipe_type === "BACKBONE" ? "BACKBONE" : "MENU";
+  const businessType = item.business_type === "BACKBONE" || item.recipe_type === "BACKBONE" ? "BACKBONE" : "MENU";
+  const dishName = String(item.dish_name || "").trim();
   return {
     meta: {
-      dish_code: String(item.dish_code || `AUTO-CONFIRM-${index + 1}`),
-      dish_name: String(item.dish_name || "").trim(),
-      recipe_type: recipeType,
-      menu_cycle: recipeType === "MENU" ? (item.menu_cycle ? String(item.menu_cycle).trim() : null) : null,
+      dish_code: deriveDishCode(String(item.dish_code || ""), dishName, `ELEMENT_${index + 1}`),
+      dish_name: dishName,
+      display_name: dishName,
+      aliases: [],
+      entity_kind: "ELEMENT",
+      business_type: businessType,
+      technique_family: String(item.technique_family || "OTHER"),
+      menu_cycle: businessType === "MENU" ? (item.menu_cycle ? String(item.menu_cycle).trim() : null) : null,
       plating_image_url: String(item.plating_image_url || "")
     },
     production: {
-      servings: String(item.servings || "1份"),
+      yield: String(item.yield || item.servings || "1份"),
       net_yield_rate: Number.isFinite(Number(item.net_yield_rate)) ? Number(item.net_yield_rate) : 1,
       key_temperature_points: []
     },
@@ -47,6 +83,7 @@ function toRecipeRecord(item: DraftItem, index: number) {
       : [{ name: "待补充主料", quantity: "1", unit: "份", note: "" }],
     steps: Array.isArray(item.steps) && item.steps.length > 0
       ? item.steps.map((s, stepIdx) => ({
+          step_id: `step_${String(stepIdx + 1).padStart(3, "0")}`,
           step_no: Number(s.step_no || stepIdx + 1),
           action: String(s.action || "").trim(),
           time_sec: Number(s.time_sec || 0),
@@ -54,7 +91,8 @@ function toRecipeRecord(item: DraftItem, index: number) {
           ...(s.ccp ? { ccp: String(s.ccp) } : {}),
           ...(s.note ? { note: String(s.note) } : {})
         }))
-      : [{ step_no: 1, action: "待补充制作步骤", time_sec: 0 }]
+      : [{ step_id: "step_001", step_no: 1, action: "待补充制作步骤", time_sec: 0 }],
+    component_refs: []
   };
 }
 
@@ -76,20 +114,39 @@ export async function POST(request: NextRequest) {
       ? (body.draft_items as DraftItem[]).map((item, index) => toRecipeRecord(item, index))
       : null;
     const recipes = recipesFromDraft || (Array.isArray(body.recipes) ? body.recipes : []);
-    const created = createImportedRecipeDrafts({
+    const created = await createImportedRecipeDraftsRepo({
       actor_email: actorEmail,
       recipes,
       v3_preview: body.v3_preview
     });
+    const autoSubmit = body.auto_submit !== false;
+    const submitted = [];
+    if (autoSubmit) {
+      for (const item of created) {
+        const versionId = Number(item?.version_id || 0);
+        if (!versionId) continue;
+        const next = await submitRecipeForReviewRepo(versionId, actorEmail, "导入后直接提交审批");
+        submitted.push({
+          recipe_id: Number(next.recipe_id),
+          version_id: Number(next.id),
+          version: `v${Number(next.version_no)}`,
+          status: next.status
+        });
+      }
+    }
     return NextResponse.json({
       success: true,
-      created
+      created,
+      submitted
     });
   } catch (error: any) {
     const code = String(error?.message || "");
     if (
       code === "RECIPES_REQUIRED" ||
       code === "DISH_NAME_REQUIRED" ||
+      code === "MENU_CYCLE_REQUIRED" ||
+      code === "INGREDIENTS_REQUIRED" ||
+      code === "INVALID_STAGE" ||
       code.startsWith("INVALID_RECIPE_RECORD")
     ) {
       return NextResponse.json({ error: code }, { status: 400 });

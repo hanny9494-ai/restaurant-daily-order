@@ -41,3 +41,9 @@ output/l0_extract_smoke/
 output/l0_extract_smoke2/
 output/l0_extract_verify_smoke/
 output/l0_extract_verify_smoke2/
+
+# Local scratch / external workspaces
+tmp/
+output/mobile-smoke/
+culinary-engine/
+jeffs-wikis/

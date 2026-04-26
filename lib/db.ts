@@ -1154,18 +1154,23 @@ function ensureUniqueRecipeCode(baseCode: string) {
   }
 }
 
-type RecipeRecordV2 = {
+type ElementRecordV3Lite = {
   meta: {
     dish_code: string;
     dish_name: string;
-    recipe_type: "MENU" | "BACKBONE";
+    display_name: string;
+    aliases: string[];
+    entity_kind: "ELEMENT";
+    business_type: "MENU" | "BACKBONE";
+    technique_family: string;
     menu_cycle: string | null;
     plating_image_url: string;
   };
   production: {
-    servings: string;
+    yield: string;
     net_yield_rate: number;
     key_temperature_points: Array<{
+      point_id: string;
       step: string;
       temp_c: number;
       hold_sec: number;
@@ -1181,24 +1186,38 @@ type RecipeRecordV2 = {
     note?: string;
   }>;
   steps: Array<{
+    step_id: string;
     step_no: number;
     action: string;
     time_sec: number;
     temp_c?: number;
+    equipment?: string[];
     ccp?: string;
     note?: string;
   }>;
+  component_refs: Array<{
+    component_kind: "RECIPE_REF" | "REFERENCE_PREP" | "RAW_ITEM" | "FINISH_ITEM";
+    child_code?: string;
+    ref_name: string;
+    component_role?: string;
+    section: "PREP" | "INTERMEDIATE" | "ASSEMBLY" | "FINISH" | "PLATING";
+    quantity?: string;
+    unit?: string;
+    source_ref?: string;
+    prep_note?: string;
+  }>;
 };
 
-function buildDefaultRecipeRecordV2(input: {
+function buildDefaultElementRecordV3Lite(input: {
   code: string;
   name: string;
-  recipe_type: "MENU" | "BACKBONE";
+  business_type: "MENU" | "BACKBONE";
+  technique_family?: string | null;
   menu_cycle?: string | null;
   servings?: string | null;
   ingredients: RecipeIngredientInput[];
   instructions: string;
-}): RecipeRecordV2 {
+}): ElementRecordV3Lite {
   const lines = String(input.instructions || "")
     .split(/\n+/g)
     .map((line) => line.trim())
@@ -1208,12 +1227,16 @@ function buildDefaultRecipeRecordV2(input: {
     meta: {
       dish_code: input.code,
       dish_name: input.name,
-      recipe_type: input.recipe_type,
-      menu_cycle: input.recipe_type === "MENU" ? normalizeMenuCycle(input.menu_cycle || "") || null : null,
+      display_name: input.name,
+      aliases: [],
+      entity_kind: "ELEMENT",
+      business_type: input.business_type,
+      technique_family: String(input.technique_family || "OTHER"),
+      menu_cycle: input.business_type === "MENU" ? normalizeMenuCycle(input.menu_cycle || "") || null : null,
       plating_image_url: ""
     },
     production: {
-      servings: String(input.servings || ""),
+      yield: String(input.servings || ""),
       net_yield_rate: 1,
       key_temperature_points: []
     },
@@ -1227,11 +1250,13 @@ function buildDefaultRecipeRecordV2(input: {
     })),
     steps: lines.length
       ? lines.map((line, idx) => ({
+          step_id: `step_${String(idx + 1).padStart(3, "0")}`,
           step_no: idx + 1,
           action: line,
           time_sec: 0
         }))
-      : [{ step_no: 1, action: "待填写", time_sec: 0 }]
+      : [{ step_id: "step_001", step_no: 1, action: "待填写", time_sec: 0 }],
+    component_refs: []
   };
 }
 
@@ -1243,13 +1268,13 @@ function hasUnexpectedKeys(obj: Record<string, unknown>, allowedKeys: string[]) 
   return Object.keys(obj).filter((key) => !allowedKeys.includes(key));
 }
 
-function validateRecipeRecordV2(input: unknown) {
+function validateElementRecordV3Lite(input: unknown) {
   const errors: string[] = [];
   if (!isPlainObject(input)) {
     return { ok: false, errors: ["root.object_required"] };
   }
   const record = input as Record<string, unknown>;
-  const rootUnexpected = hasUnexpectedKeys(record, ["meta", "production", "allergens", "diet_flags", "ingredients", "steps"]);
+  const rootUnexpected = hasUnexpectedKeys(record, ["meta", "production", "allergens", "diet_flags", "ingredients", "steps", "component_refs"]);
   if (rootUnexpected.length > 0) errors.push(`root.additional_properties:${rootUnexpected.join("|")}`);
 
   if (!("meta" in record)) errors.push("meta.required");
@@ -1267,29 +1292,42 @@ function validateRecipeRecordV2(input: unknown) {
   const dietFlags = record.diet_flags;
   const ingredients = record.ingredients;
   const steps = record.steps;
+  const componentRefs = record.component_refs;
 
   if (!isPlainObject(meta)) {
     errors.push("meta.object_required");
   } else {
-    const metaUnexpected = hasUnexpectedKeys(meta, ["dish_code", "dish_name", "recipe_type", "menu_cycle", "plating_image_url"]);
+    const metaUnexpected = hasUnexpectedKeys(meta, ["dish_code", "dish_name", "display_name", "aliases", "entity_kind", "business_type", "technique_family", "menu_cycle", "plating_image_url"]);
     if (metaUnexpected.length > 0) errors.push(`meta.additional_properties:${metaUnexpected.join("|")}`);
     if (!("dish_code" in meta)) errors.push("meta.dish_code.required");
     if (!("dish_name" in meta)) errors.push("meta.dish_name.required");
-    if (!("recipe_type" in meta)) errors.push("meta.recipe_type.required");
+    if (!("display_name" in meta)) errors.push("meta.display_name.required");
+    if (!("aliases" in meta)) errors.push("meta.aliases.required");
+    if (!("entity_kind" in meta)) errors.push("meta.entity_kind.required");
+    if (!("business_type" in meta)) errors.push("meta.business_type.required");
+    if (!("technique_family" in meta)) errors.push("meta.technique_family.required");
     if (!("menu_cycle" in meta)) errors.push("meta.menu_cycle.required");
     if (!("plating_image_url" in meta)) errors.push("meta.plating_image_url.required");
 
     if (typeof meta.dish_code !== "string" || meta.dish_code.trim().length < 1) errors.push("meta.dish_code.invalid");
     if (typeof meta.dish_name !== "string" || meta.dish_name.trim().length < 1) errors.push("meta.dish_name.invalid");
+    if (typeof meta.display_name !== "string") errors.push("meta.display_name.invalid");
+    if (!Array.isArray(meta.aliases) || meta.aliases.some((item) => typeof item !== "string" || item.trim().length < 1)) {
+      errors.push("meta.aliases.invalid");
+    }
+    if (meta.entity_kind !== "ELEMENT") errors.push("meta.entity_kind.invalid");
     if (typeof meta.plating_image_url !== "string") errors.push("meta.plating_image_url.invalid");
+    if (typeof meta.technique_family !== "string" || meta.technique_family.trim().length < 1) {
+      errors.push("meta.technique_family.invalid");
+    }
 
-    if (meta.recipe_type !== "MENU" && meta.recipe_type !== "BACKBONE") {
-      errors.push("meta.recipe_type.invalid");
-    } else if (meta.recipe_type === "MENU") {
+    if (meta.business_type !== "MENU" && meta.business_type !== "BACKBONE") {
+      errors.push("meta.business_type.invalid");
+    } else if (meta.business_type === "MENU") {
       if (typeof meta.menu_cycle !== "string" || meta.menu_cycle.trim().length < 1) {
         errors.push("meta.menu_cycle.required_for_menu");
       }
-    } else if (meta.recipe_type === "BACKBONE") {
+    } else if (meta.business_type === "BACKBONE") {
       if (meta.menu_cycle !== null) {
         errors.push("meta.menu_cycle.must_be_null_for_backbone");
       }
@@ -1299,13 +1337,13 @@ function validateRecipeRecordV2(input: unknown) {
   if (!isPlainObject(production)) {
     errors.push("production.object_required");
   } else {
-    const productionUnexpected = hasUnexpectedKeys(production, ["servings", "net_yield_rate", "key_temperature_points"]);
+    const productionUnexpected = hasUnexpectedKeys(production, ["yield", "net_yield_rate", "key_temperature_points"]);
     if (productionUnexpected.length > 0) errors.push(`production.additional_properties:${productionUnexpected.join("|")}`);
-    if (!("servings" in production)) errors.push("production.servings.required");
+    if (!("yield" in production)) errors.push("production.yield.required");
     if (!("net_yield_rate" in production)) errors.push("production.net_yield_rate.required");
     if (!("key_temperature_points" in production)) errors.push("production.key_temperature_points.required");
 
-    if (typeof production.servings !== "string") errors.push("production.servings.invalid");
+    if (typeof production.yield !== "string") errors.push("production.yield.invalid");
     if (typeof production.net_yield_rate !== "number" || !Number.isFinite(production.net_yield_rate)) {
       errors.push("production.net_yield_rate.invalid");
     } else if (!(production.net_yield_rate > 0 && production.net_yield_rate <= 1)) {
@@ -1320,14 +1358,16 @@ function validateRecipeRecordV2(input: unknown) {
           errors.push(`production.key_temperature_points.${idx}.object_required`);
           return;
         }
-        const ptUnexpected = hasUnexpectedKeys(point, ["step", "temp_c", "hold_sec", "note"]);
+        const ptUnexpected = hasUnexpectedKeys(point, ["point_id", "step", "temp_c", "hold_sec", "note"]);
         if (ptUnexpected.length > 0) {
           errors.push(`production.key_temperature_points.${idx}.additional_properties:${ptUnexpected.join("|")}`);
         }
+        if (!("point_id" in point)) errors.push(`production.key_temperature_points.${idx}.point_id.required`);
         if (!("step" in point)) errors.push(`production.key_temperature_points.${idx}.step.required`);
         if (!("temp_c" in point)) errors.push(`production.key_temperature_points.${idx}.temp_c.required`);
         if (!("hold_sec" in point)) errors.push(`production.key_temperature_points.${idx}.hold_sec.required`);
 
+        if (typeof point.point_id !== "string" || point.point_id.trim().length < 1) errors.push(`production.key_temperature_points.${idx}.point_id.invalid`);
         if (typeof point.step !== "string") errors.push(`production.key_temperature_points.${idx}.step.invalid`);
         if (typeof point.temp_c !== "number" || !Number.isFinite(point.temp_c)) errors.push(`production.key_temperature_points.${idx}.temp_c.invalid`);
         if (typeof point.hold_sec !== "number" || !Number.isFinite(point.hold_sec)) errors.push(`production.key_temperature_points.${idx}.hold_sec.invalid`);
@@ -1381,11 +1421,15 @@ function validateRecipeRecordV2(input: unknown) {
         errors.push(`steps.${idx}.object_required`);
         return;
       }
-      const stepUnexpected = hasUnexpectedKeys(item, ["step_no", "action", "time_sec", "temp_c", "ccp", "note"]);
+      const stepUnexpected = hasUnexpectedKeys(item, ["step_id", "step_no", "action", "time_sec", "temp_c", "equipment", "ccp", "note"]);
       if (stepUnexpected.length > 0) errors.push(`steps.${idx}.additional_properties:${stepUnexpected.join("|")}`);
+      if (!("step_id" in item)) errors.push(`steps.${idx}.step_id.required`);
       if (!("step_no" in item)) errors.push(`steps.${idx}.step_no.required`);
       if (!("action" in item)) errors.push(`steps.${idx}.action.required`);
       if (!("time_sec" in item)) errors.push(`steps.${idx}.time_sec.required`);
+      if (typeof item.step_id !== "string" || item.step_id.trim().length < 1) {
+        errors.push(`steps.${idx}.step_id.invalid`);
+      }
       if (typeof item.step_no !== "number" || !Number.isInteger(item.step_no) || item.step_no < 1) {
         errors.push(`steps.${idx}.step_no.invalid`);
       }
@@ -1401,14 +1445,28 @@ function validateRecipeRecordV2(input: unknown) {
     });
   }
 
+  if (!Array.isArray(componentRefs)) {
+    errors.push("component_refs.array_required");
+  } else {
+    componentRefs.forEach((item, idx) => {
+      if (!isPlainObject(item)) {
+        errors.push(`component_refs.${idx}.object_required`);
+        return;
+      }
+      if (!("component_kind" in item)) errors.push(`component_refs.${idx}.component_kind.required`);
+      if (!("ref_name" in item)) errors.push(`component_refs.${idx}.ref_name.required`);
+      if (!("section" in item)) errors.push(`component_refs.${idx}.section.required`);
+    });
+  }
+
   return {
     ok: errors.length === 0,
     errors
   };
 }
 
-function validateRecipeRecordV2ForDraft(input: unknown) {
-  const validation = validateRecipeRecordV2(input);
+function validateElementRecordV3LiteForDraft(input: unknown) {
+  const validation = validateElementRecordV3Lite(input);
   if (validation.ok) return validation;
   const filteredErrors = validation.errors.filter((item) => item !== "meta.menu_cycle.required_for_menu");
   return {
@@ -1417,23 +1475,30 @@ function validateRecipeRecordV2ForDraft(input: unknown) {
   };
 }
 
-function normalizeRecipeRecordV2(input: unknown) {
+function normalizeElementRecordV3Lite(input: unknown) {
   const record = (input && typeof input === "object" ? input : {}) as Record<string, any>;
-  const output: RecipeRecordV2 = {
+  const output: ElementRecordV3Lite = {
     meta: {
       dish_code: String(record?.meta?.dish_code || "").trim(),
       dish_name: String(record?.meta?.dish_name || "").trim(),
-      recipe_type: record?.meta?.recipe_type,
-      menu_cycle: record?.meta?.recipe_type === "MENU"
+      display_name: String(record?.meta?.display_name || record?.meta?.dish_name || "").trim(),
+      aliases: Array.isArray(record?.meta?.aliases)
+        ? record.meta.aliases.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+        : [],
+      entity_kind: "ELEMENT",
+      business_type: record?.meta?.business_type,
+      technique_family: String(record?.meta?.technique_family || "OTHER").trim() || "OTHER",
+      menu_cycle: record?.meta?.business_type === "MENU"
         ? normalizeMenuCycle(String(record?.meta?.menu_cycle || ""))
         : null,
       plating_image_url: String(record?.meta?.plating_image_url || "").trim()
     },
     production: {
-      servings: String(record?.production?.servings || "").trim(),
+      yield: String(record?.production?.yield || record?.production?.servings || "").trim(),
       net_yield_rate: Number(record?.production?.net_yield_rate || 0),
       key_temperature_points: Array.isArray(record?.production?.key_temperature_points)
         ? record.production.key_temperature_points.map((point: any) => ({
+            point_id: String(point?.point_id || "").trim(),
             step: String(point?.step || "").trim(),
             temp_c: Number(point?.temp_c || 0),
             hold_sec: Number(point?.hold_sec || 0),
@@ -1458,26 +1523,79 @@ function normalizeRecipeRecordV2(input: unknown) {
     steps: Array.isArray(record?.steps)
       ? record.steps.map((item: any) => {
           const out: {
+            step_id: string;
             step_no: number;
             action: string;
             time_sec: number;
             temp_c?: number;
+            equipment?: string[];
             ccp?: string;
             note?: string;
           } = {
+            step_id: String(item?.step_id || "").trim(),
             step_no: Number(item?.step_no || 0),
             action: String(item?.action || "").trim(),
             time_sec: Number(item?.time_sec || 0)
           };
           if (item?.temp_c !== undefined && item?.temp_c !== null) out.temp_c = Number(item?.temp_c);
+          if (Array.isArray(item?.equipment)) out.equipment = item.equipment.map((entry: unknown) => String(entry || "").trim()).filter(Boolean);
           if (item?.ccp !== undefined) out.ccp = String(item?.ccp || "").trim();
           if (item?.note !== undefined) out.note = String(item?.note || "").trim();
           return out;
         })
+      : [],
+    component_refs: Array.isArray(record?.component_refs)
+      ? record.component_refs.map((item: any) => ({
+          component_kind: item?.component_kind === "RECIPE_REF" || item?.component_kind === "REFERENCE_PREP" || item?.component_kind === "RAW_ITEM" || item?.component_kind === "FINISH_ITEM"
+            ? item.component_kind
+            : "REFERENCE_PREP",
+          ...(item?.child_code ? { child_code: String(item.child_code).trim() } : {}),
+          ref_name: String(item?.ref_name || "").trim(),
+          ...(item?.component_role ? { component_role: String(item.component_role).trim() } : {}),
+          section: item?.section || "PREP",
+          ...(item?.quantity ? { quantity: String(item.quantity).trim() } : {}),
+          ...(item?.unit ? { unit: String(item.unit).trim() } : {}),
+          ...(item?.source_ref ? { source_ref: String(item.source_ref).trim() } : {}),
+          ...(item?.prep_note ? { prep_note: String(item.prep_note).trim() } : {})
+        }))
       : []
   };
 
   return output;
+}
+
+type RecipeRecordV2 = ElementRecordV3Lite;
+
+function buildDefaultRecipeRecordV2(input: {
+  code: string;
+  name: string;
+  recipe_type: "MENU" | "BACKBONE";
+  menu_cycle?: string | null;
+  servings?: string | null;
+  ingredients: RecipeIngredientInput[];
+  instructions: string;
+}) {
+  return buildDefaultElementRecordV3Lite({
+    code: input.code,
+    name: input.name,
+    business_type: input.recipe_type,
+    menu_cycle: input.menu_cycle,
+    servings: input.servings,
+    ingredients: input.ingredients,
+    instructions: input.instructions
+  });
+}
+
+function validateRecipeRecordV2(input: unknown) {
+  return validateElementRecordV3Lite(input);
+}
+
+function validateRecipeRecordV2ForDraft(input: unknown) {
+  return validateElementRecordV3LiteForDraft(input);
+}
+
+function normalizeRecipeRecordV2(input: unknown) {
+  return normalizeElementRecordV3Lite(input);
 }
 
 function isCompositeRecipeRecord(input: unknown): input is {
@@ -1554,7 +1672,7 @@ function getRecipeVersion(versionId: number) {
   return db
     .prepare(`
       SELECT
-        id, recipe_id, version_no, status, servings, instructions, record_json AS recipe_record_json, change_note, created_by,
+        id, recipe_id, version_no, status, servings AS yield, servings, instructions, record_json AS recipe_record_json, change_note, created_by,
         submitted_at, approved_at, reviewed_by, review_note, published_at, created_at, updated_at
       FROM recipe_versions
       WHERE id = ?
@@ -1676,7 +1794,7 @@ export function getRecipeDetail(recipeId: number): RecipeDetail | null {
   const versions = db
     .prepare(`
       SELECT
-        id, recipe_id, version_no, status, servings, instructions, record_json AS recipe_record_json, change_note, created_by,
+        id, recipe_id, version_no, status, servings AS yield, servings, instructions, record_json AS recipe_record_json, change_note, created_by,
         submitted_at, approved_at, reviewed_by, review_note, published_at, created_at, updated_at
       FROM recipe_versions
       WHERE recipe_id = ?
@@ -1698,8 +1816,10 @@ export function createRecipeWithDraft(input: {
   code: string;
   name: string;
   description?: string;
+  business_type?: "MENU" | "BACKBONE";
   recipe_type?: "MENU" | "BACKBONE";
   menu_cycle?: string;
+  yield?: string;
   servings?: string;
   instructions: string;
   change_note?: string;
@@ -1709,12 +1829,12 @@ export function createRecipeWithDraft(input: {
   const actor = ensureRecipeRole(input.created_by, ["OWNER", "EDITOR"]);
   const code = normalizeRecipeCode(input.code || input.name);
   const name = input.name.trim();
-  const recipeType = input.recipe_type === "MENU" ? "MENU" : "BACKBONE";
+  const recipeType = input.business_type === "MENU" || input.recipe_type === "MENU" ? "MENU" : "BACKBONE";
   const menuCycle = normalizeMenuCycle(input.menu_cycle);
-  const instructions = input.instructions.trim();
+  const rawInstructions = input.instructions.trim();
+  const yieldValue = input.yield?.trim() || input.servings?.trim() || "";
   if (!code || !name) throw new Error("INVALID_RECIPE_FIELDS");
   if (recipeType === "MENU" && !menuCycle) throw new Error("MENU_CYCLE_REQUIRED");
-  if (!instructions) throw new Error("INSTRUCTIONS_REQUIRED");
   if (!Array.isArray(input.ingredients) || input.ingredients.length < 1) {
     throw new Error("INGREDIENTS_REQUIRED");
   }
@@ -1739,17 +1859,23 @@ export function createRecipeWithDraft(input: {
   `);
 
   const tx = db.transaction(() => {
-    const record = buildDefaultRecipeRecordV2({
+    const record = buildDefaultElementRecordV3Lite({
       code,
       name,
-      recipe_type: recipeType,
+      business_type: recipeType,
       menu_cycle: recipeType === "MENU" ? menuCycle : null,
-      servings: input.servings?.trim() || "",
+      servings: yieldValue,
       ingredients: input.ingredients,
-      instructions
+      instructions: rawInstructions
     });
-    const validation = validateRecipeRecordV2(record);
+    const validation = validateElementRecordV3Lite(record);
     if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
+    const instructions = rawInstructions || record.steps
+      .slice()
+      .sort((a, b) => Number(a.step_no || 0) - Number(b.step_no || 0))
+      .map((step) => `${Number(step.step_no || 0)}. ${String(step.action || "").trim()}`)
+      .filter(Boolean)
+      .join("\n");
 
     const recipeRes = insertRecipe.run(
       code,
@@ -1763,7 +1889,7 @@ export function createRecipeWithDraft(input: {
     const recipeId = Number(recipeRes.lastInsertRowid);
     const versionRes = insertVersion.run(
       recipeId,
-      input.servings?.trim() || null,
+      yieldValue || null,
       instructions,
       JSON.stringify(record),
       input.change_note?.trim() || null,
@@ -1876,33 +2002,43 @@ export function createImportedRecipeDrafts(input: {
       instructions_override?: string;
     }
   ) => {
-    const recipeType = options?.business_type || (normalized.meta.recipe_type === "MENU" ? "MENU" : "BACKBONE");
+    const recipeType = options?.business_type || (normalized.meta.business_type === "MENU" ? "MENU" : "BACKBONE");
     const dishName = String(normalized.meta.dish_name || "").trim();
     if (!dishName) throw new Error("DISH_NAME_REQUIRED");
     const menuCycle = recipeType === "MENU"
       ? (normalized.meta.menu_cycle ? normalizeMenuCycle(normalized.meta.menu_cycle) : null)
       : null;
     const code = ensureUniqueRecipeCode(options?.codeSeed || normalized.meta.dish_code || makeAutoRecipeCode(0));
-    const nextRecord: RecipeRecordV2 = {
+    const nextRecord: ElementRecordV3Lite = {
       ...normalized,
       meta: {
         ...normalized.meta,
         dish_code: code,
         dish_name: dishName,
-        recipe_type: recipeType,
+        display_name: normalized.meta.display_name || dishName,
+        aliases: Array.isArray(normalized.meta.aliases) ? normalized.meta.aliases : [],
+        entity_kind: "ELEMENT",
+        business_type: recipeType,
+        technique_family: String(options?.technique_family || normalized.meta.technique_family || "OTHER"),
         menu_cycle: menuCycle
       },
       production: {
         ...normalized.production,
-        servings: String(normalized.production.servings || "1份"),
+        yield: String(normalized.production.yield || "1份"),
         net_yield_rate: Number.isFinite(Number(normalized.production.net_yield_rate))
           ? Number(normalized.production.net_yield_rate) || 1
           : 1
       },
       ingredients: normalized.ingredients.filter((item) => item.name && item.quantity && item.unit),
-      steps: normalized.steps.length > 0 ? normalized.steps : [{ step_no: 1, action: "待填写", time_sec: 0 }]
+      steps: normalized.steps.length > 0
+        ? normalized.steps.map((step, idx) => ({
+            ...step,
+            step_id: step.step_id || `step_${String(idx + 1).padStart(3, "0")}`
+          }))
+        : [{ step_id: "step_001", step_no: 1, action: "待填写", time_sec: 0 }],
+      component_refs: Array.isArray(normalized.component_refs) ? normalized.component_refs : []
     };
-    const validation = validateRecipeRecordV2ForDraft(nextRecord);
+    const validation = validateElementRecordV3LiteForDraft(nextRecord);
     if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
 
     const instructions = options?.instructions_override || nextRecord.steps
@@ -1923,7 +2059,7 @@ export function createImportedRecipeDrafts(input: {
     const recipeId = Number(recipeResult.lastInsertRowid);
     const versionResult = insertVersion.run(
       recipeId,
-      nextRecord.production.servings || "1份",
+      nextRecord.production.yield || "1份",
       instructions,
       options?.record_json || JSON.stringify(nextRecord),
       options?.import_note || "智能导入创建",
@@ -1941,15 +2077,15 @@ export function createImportedRecipeDrafts(input: {
       );
     });
     db.prepare("UPDATE recipes SET active_version_id = ?, updated_at = datetime('now') WHERE id = ?").run(versionId, recipeId);
-    return {
-      recipe_id: recipeId,
-      version_id: versionId,
-      version: "v1" as const,
-      status: "DRAFT" as const,
-      dish_name: dishName,
-      code,
-      recipe_type: recipeType
-    };
+      return {
+        recipe_id: recipeId,
+        version_id: versionId,
+        version: "v1" as const,
+        status: "DRAFT" as const,
+        dish_name: dishName,
+        code,
+        recipe_type: recipeType
+      };
   };
 
   const run = db.transaction(() => {
@@ -1999,24 +2135,31 @@ export function createImportedRecipeDrafts(input: {
         meta: {
           dish_code: compositeCode,
           dish_name: compositeRecord.meta.dish_name,
-          recipe_type: "MENU",
+          display_name: compositeRecord.meta.display_name,
+          aliases: compositeRecord.meta.aliases,
+          entity_kind: "ELEMENT",
+          business_type: "MENU",
+          technique_family: "OTHER",
           menu_cycle: compositeRecord.meta.menu_cycle,
           plating_image_url: ""
         },
         production: {
-          servings: "1道",
+          yield: "1道",
           net_yield_rate: 1,
           key_temperature_points: []
         },
         allergens: [],
+        diet_flags: [],
         ingredients: [{ name: "见 assembly components", quantity: "1", unit: "组", note: "V3-lite composite placeholder" }],
         steps: compositeRecord.assembly_steps.length > 0
           ? compositeRecord.assembly_steps.map((step: any, idx: number) => ({
+              step_id: step?.step_id || `step_${String(idx + 1).padStart(3, "0")}`,
               step_no: Number(step?.step_no || idx + 1),
               action: String(step?.action || "").trim() || "待填写",
               time_sec: 0
             }))
-          : [{ step_no: 1, action: "待填写整道菜 assembly 动作", time_sec: 0 }]
+          : [{ step_id: "step_001", step_no: 1, action: "待填写整道菜 assembly 动作", time_sec: 0 }],
+        component_refs: []
       });
       const compositeCreated = createElementDraft(compositeNormalized, {
         codeSeed: compositeCode,
@@ -2166,9 +2309,9 @@ export function previewSmartEdit(input: {
     record = buildDefaultRecipeRecordV2({
       code: recipe.code,
       name: recipe.name,
-      recipe_type: recipe.recipe_type,
+      recipe_type: recipe.business_type,
       menu_cycle: recipe.menu_cycle,
-      servings: version.servings || "1份",
+      servings: version.yield || version.servings || "1份",
       ingredients: getRecipeIngredients(version.id).map((it) => ({
         name: it.name,
         quantity: it.quantity,
@@ -2252,7 +2395,7 @@ export function confirmSmartEdit(input: {
       .map((step) => `${step.step_no}. ${step.action}`)
       .join("\n");
     updateRecipeDraft(newVersionId, {
-      servings: normalizedRecord.production.servings || source.servings || "",
+      servings: normalizedRecord.production.yield || source.servings || "",
       instructions,
       ingredients: draftIngredients,
       recipe_record_json: normalizedRecord,
@@ -2277,6 +2420,7 @@ export function updateRecipeBase(
     code?: string;
     name?: string;
     description?: string;
+    business_type?: "MENU" | "BACKBONE";
     recipe_type?: "MENU" | "BACKBONE";
     menu_cycle?: string;
     actor: string;
@@ -2288,7 +2432,12 @@ export function updateRecipeBase(
 
   const code = normalizeRecipeCode(input.code ?? existing.code);
   const name = String(input.name ?? existing.name).trim();
-  const recipeType = input.recipe_type === "MENU" ? "MENU" : (input.recipe_type === "BACKBONE" ? "BACKBONE" : existing.recipe_type);
+  const recipeType =
+    input.business_type === "MENU" || input.recipe_type === "MENU"
+      ? "MENU"
+      : input.business_type === "BACKBONE" || input.recipe_type === "BACKBONE"
+        ? "BACKBONE"
+        : existing.business_type;
   const menuCycleRaw = input.menu_cycle ?? existing.menu_cycle ?? "";
   const menuCycle = normalizeMenuCycle(menuCycleRaw);
 
@@ -2300,6 +2449,7 @@ export function updateRecipeBase(
     SET code = ?,
         name = ?,
         description = ?,
+        business_type = ?,
         recipe_type = ?,
         menu_cycle = ?,
         updated_at = datetime('now')
@@ -2309,6 +2459,7 @@ export function updateRecipeBase(
     name,
     typeof input.description === "string" ? input.description.trim() : existing.description,
     recipeType,
+    recipeType,
     recipeType === "MENU" ? menuCycle : null,
     recipeId
   );
@@ -2316,7 +2467,184 @@ export function updateRecipeBase(
   return getRecipeDetail(recipeId);
 }
 
+export function createCompositeRecipeWithDraft(input: {
+  code: string;
+  name: string;
+  description?: string;
+  menu_cycle?: string;
+  change_note?: string;
+  created_by: string;
+  assembly_components: Array<{
+    component_kind?: "RECIPE_REF" | "REFERENCE_PREP" | "RAW_ITEM" | "FINISH_ITEM";
+    child_code?: string;
+    ref_name: string;
+    component_role?: string;
+    section?: "PREP" | "INTERMEDIATE" | "ASSEMBLY" | "FINISH" | "PLATING" | string;
+    quantity?: string;
+    unit?: string;
+    is_optional?: boolean;
+    source_ref?: string;
+    prep_note?: string;
+  }>;
+  assembly_steps?: Array<{
+    step_id?: string;
+    step_no?: number;
+    action: string;
+  }>;
+}) {
+  const actor = ensureRecipeRole(input.created_by, ["OWNER", "EDITOR"]);
+  const code = normalizeRecipeCode(input.code || input.name);
+  const name = String(input.name || "").trim();
+  const menuCycle = normalizeMenuCycle(input.menu_cycle);
+  if (!code || !name) throw new Error("INVALID_RECIPE_FIELDS");
+  if (!menuCycle) throw new Error("MENU_CYCLE_REQUIRED");
+  if (!Array.isArray(input.assembly_components) || input.assembly_components.length < 1) throw new Error("ASSEMBLY_COMPONENTS_REQUIRED");
+
+  const assemblySteps = Array.isArray(input.assembly_steps) && input.assembly_steps.length > 0
+    ? input.assembly_steps
+        .map((step, idx) => ({
+          step_id: step.step_id || `assembly_${String(idx + 1).padStart(3, "0")}`,
+          step_no: Number(step.step_no || idx + 1),
+          action: String(step.action || "").trim()
+        }))
+        .filter((step) => step.action)
+    : [{ step_id: "assembly_001", step_no: 1, action: "按出品顺序组合各 element 并完成最终装盘。" }];
+
+  const compositeRecord = {
+    meta: {
+      dish_code: code,
+      dish_name: name,
+      display_name: name,
+      aliases: [],
+      entity_kind: "COMPOSITE" as const,
+      business_type: "MENU" as const,
+      menu_cycle: menuCycle
+    },
+    assembly_components: input.assembly_components.map((component, idx) => ({
+      component_kind: component.component_kind || "RECIPE_REF",
+      child_code: component.child_code ? String(component.child_code).trim() : undefined,
+      ref_name: String(component.ref_name || component.child_code || `component-${idx + 1}`).trim(),
+      component_role: component.component_role ? String(component.component_role).trim() : undefined,
+      section: component.section ? String(component.section).trim() : "ASSEMBLY",
+      sort_order: idx + 1,
+      quantity: component.quantity ? String(component.quantity).trim() : undefined,
+      unit: component.unit ? String(component.unit).trim() : undefined,
+      is_optional: Boolean(component.is_optional),
+      source_ref: component.source_ref ? String(component.source_ref).trim() : undefined,
+      prep_note: component.prep_note ? String(component.prep_note).trim() : undefined
+    })),
+    assembly_steps: assemblySteps
+  };
+  const validation = validateCompositeRecordV3Lite(compositeRecord);
+  if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
+
+  const instructions = compositeRecord.assembly_steps
+    .map((step) => `${step.step_no}. ${step.action}`)
+    .join("\n");
+
+  const insertRecipe = db.prepare(`
+    INSERT INTO recipes(code, name, description, entity_kind, business_type, technique_family, recipe_type, menu_cycle, created_by, updated_at)
+    VALUES (?, ?, ?, 'COMPOSITE', 'MENU', 'COMPOSITE', 'MENU', ?, ?, datetime('now'))
+  `);
+  const insertVersion = db.prepare(`
+    INSERT INTO recipe_versions(
+      recipe_id, version_no, status, servings, instructions, record_json, change_note, created_by, updated_at
+    ) VALUES (?, 1, 'DRAFT', ?, ?, ?, ?, ?, datetime('now'))
+  `);
+  const insertComponent = db.prepare(`
+    INSERT INTO recipe_version_components(
+      parent_version_id, component_kind, child_recipe_id, child_version_id, display_name,
+      component_role, section, quantity, unit, sort_order, is_optional, source_ref, prep_note
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const setActiveVersion = db.prepare(`
+    UPDATE recipes
+    SET active_version_id = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `);
+
+  const tx = db.transaction(() => {
+    const recipeRes = insertRecipe.run(
+      code,
+      name,
+      input.description?.trim() || null,
+      menuCycle,
+      actor.email
+    );
+    const recipeId = Number(recipeRes.lastInsertRowid);
+    const versionRes = insertVersion.run(
+      recipeId,
+      "1道",
+      instructions,
+      JSON.stringify(compositeRecord),
+      input.change_note?.trim() || null,
+      actor.email
+    );
+    const versionId = Number(versionRes.lastInsertRowid);
+    compositeRecord.assembly_components.forEach((component, idx) => {
+      let childRecipeId: number | null = null;
+      let childVersionId: number | null = null;
+      if (component.component_kind === "RECIPE_REF" && component.child_code) {
+        const linkedRecipe = findRecipeByCode(component.child_code);
+        childRecipeId = linkedRecipe?.id || null;
+        childVersionId = linkedRecipe?.active_version_id || null;
+      }
+      insertComponent.run(
+        versionId,
+        component.component_kind,
+        childRecipeId,
+        childVersionId,
+        component.ref_name,
+        component.component_role || null,
+        component.section,
+        component.quantity || null,
+        component.unit || null,
+        Number(component.sort_order || idx + 1),
+        Number(component.is_optional ? 1 : 0),
+        component.source_ref || null,
+        component.prep_note || null
+      );
+    });
+    setActiveVersion.run(versionId, recipeId);
+    return recipeId;
+  });
+
+  const recipeId = tx();
+  return getRecipeDetail(recipeId);
+}
+
+export function deleteRecipe(recipeId: number, input: { actor: string }) {
+  ensureRecipeRole(input.actor, ["OWNER", "EDITOR"]);
+  const existing = getRecipeDetail(recipeId);
+  if (!existing) throw new Error("NOT_FOUND");
+
+  const versionIds = existing.versions.map((version) => version.id);
+  const deleteReferencedComponentsByRecipe = db.prepare("DELETE FROM recipe_version_components WHERE child_recipe_id = ?");
+  const deleteReferencedComponentsByVersion = db.prepare("DELETE FROM recipe_version_components WHERE child_version_id = ?");
+  const deleteSyncLogs = db.prepare("DELETE FROM recipe_sync_logs WHERE recipe_id = ?");
+  const deleteRecipe = db.prepare("DELETE FROM recipes WHERE id = ?");
+
+  const tx = db.transaction(() => {
+    deleteReferencedComponentsByRecipe.run(recipeId);
+    for (const versionId of versionIds) {
+      deleteReferencedComponentsByVersion.run(versionId);
+    }
+    deleteSyncLogs.run(recipeId);
+    deleteRecipe.run(recipeId);
+  });
+
+  tx();
+
+  return {
+    id: existing.id,
+    code: existing.code,
+    name: existing.name,
+    deleted: true
+  };
+}
+
 export function updateRecipeDraft(versionId: number, input: {
+  yield?: string;
   servings?: string;
   instructions?: string;
   change_note?: string;
@@ -2387,7 +2715,7 @@ export function updateRecipeDraft(versionId: number, input: {
     compositeRecord.meta.dish_code = recipeDetail.code;
     compositeRecord.meta.dish_name = recipeDetail.name;
     compositeRecord.meta.business_type = recipeDetail.business_type;
-    compositeRecord.meta.menu_cycle = recipeDetail.recipe_type === "MENU" ? recipeDetail.menu_cycle : null;
+    compositeRecord.meta.menu_cycle = recipeDetail.business_type === "MENU" ? recipeDetail.menu_cycle : null;
     if (!Array.isArray(compositeRecord.assembly_steps) || compositeRecord.assembly_steps.length < 1) {
       compositeRecord.assembly_steps = [{ step_id: "assembly_001", step_no: 1, action: "待填写整道菜 assembly 动作" }];
     }
@@ -2399,7 +2727,7 @@ export function updateRecipeDraft(versionId: number, input: {
       .map((step: any, idx: number) => `${Number(step?.step_no || idx + 1)}. ${String(step?.action || "").trim()}`)
       .filter(Boolean)
       .join("\n");
-    const servingsValue = input.servings?.trim() ?? version.servings ?? "1道";
+    const servingsValue = input.yield?.trim() ?? input.servings?.trim() ?? version.yield ?? version.servings ?? "1道";
 
     const tx = db.transaction(() => {
       updateVersion.run(
@@ -2452,7 +2780,7 @@ export function updateRecipeDraft(versionId: number, input: {
     return { ...updated, ingredients: getRecipeIngredients(versionId), components: getRecipeVersionComponents(versionId) };
   }
 
-  let recordObject: RecipeRecordV2;
+  let recordObject: ElementRecordV3Lite;
   if (input.recipe_record_json !== undefined) {
     let parsedRaw: unknown;
     try {
@@ -2462,11 +2790,11 @@ export function updateRecipeDraft(versionId: number, input: {
     } catch {
       throw new Error("INVALID_RECIPE_RECORD_JSON");
     }
-    const parsedValidation = validateRecipeRecordV2ForDraft(parsedRaw);
+    const parsedValidation = validateElementRecordV3LiteForDraft(parsedRaw);
     if (!parsedValidation.ok) {
       throw new Error(`INVALID_RECIPE_RECORD:${parsedValidation.errors.join(",")}`);
     }
-    recordObject = normalizeRecipeRecordV2(parsedRaw);
+    recordObject = normalizeElementRecordV3Lite(parsedRaw);
   } else if (version.recipe_record_json) {
     let rawRecord: unknown;
     try {
@@ -2474,16 +2802,16 @@ export function updateRecipeDraft(versionId: number, input: {
     } catch {
       throw new Error("INVALID_RECIPE_RECORD_JSON");
     }
-    const rawValidation = validateRecipeRecordV2ForDraft(rawRecord);
+    const rawValidation = validateElementRecordV3LiteForDraft(rawRecord);
     if (rawValidation.ok) {
-      recordObject = normalizeRecipeRecordV2(rawRecord);
+      recordObject = normalizeElementRecordV3Lite(rawRecord);
     } else {
-      recordObject = buildDefaultRecipeRecordV2({
+      recordObject = buildDefaultElementRecordV3Lite({
         code: recipeDetail.code,
         name: recipeDetail.name,
-        recipe_type: recipeDetail.recipe_type,
+        business_type: recipeDetail.business_type,
         menu_cycle: recipeDetail.menu_cycle,
-        servings: input.servings?.trim() ?? version.servings,
+        servings: input.yield?.trim() ?? input.servings?.trim() ?? version.yield ?? version.servings,
         ingredients: sourceIngredients,
         instructions
       });
@@ -2494,32 +2822,42 @@ export function updateRecipeDraft(versionId: number, input: {
       unit: String(it.unit || "").trim(),
       note: String(it.note || "").trim()
     }));
-    const mergedServings = input.servings?.trim() ?? version.servings ?? recordObject.production.servings ?? "";
-    recordObject.production.servings = String(mergedServings);
+    const mergedYield = input.yield?.trim() ?? input.servings?.trim() ?? version.yield ?? version.servings ?? recordObject.production.yield ?? "";
+    recordObject.production.yield = String(mergedYield);
   } else {
-    recordObject = buildDefaultRecipeRecordV2({
+    recordObject = buildDefaultElementRecordV3Lite({
       code: recipeDetail.code,
       name: recipeDetail.name,
-      recipe_type: recipeDetail.recipe_type,
+      business_type: recipeDetail.business_type,
       menu_cycle: recipeDetail.menu_cycle,
-      servings: input.servings?.trim() ?? version.servings,
+      servings: input.yield?.trim() ?? input.servings?.trim() ?? version.yield ?? version.servings,
       ingredients: sourceIngredients,
       instructions
     });
   }
   recordObject.meta.dish_code = recipeDetail.code;
   recordObject.meta.dish_name = recipeDetail.name;
-  recordObject.meta.recipe_type = recipeDetail.recipe_type;
-  recordObject.meta.menu_cycle = recipeDetail.recipe_type === "MENU" ? recipeDetail.menu_cycle : null;
+  recordObject.meta.display_name = recordObject.meta.display_name || recipeDetail.name;
+  recordObject.meta.entity_kind = "ELEMENT";
+  recordObject.meta.business_type = recipeDetail.business_type;
+  recordObject.meta.technique_family = recordObject.meta.technique_family || recipeDetail.technique_family || "OTHER";
+  recordObject.meta.menu_cycle = recipeDetail.business_type === "MENU" ? recipeDetail.menu_cycle : null;
+  recordObject.production.yield = String(recordObject.production.yield || input.yield?.trim() || input.servings?.trim() || version.yield || version.servings || "");
+  recordObject.steps = (recordObject.steps || []).map((step, idx) => ({
+    ...step,
+    step_id: step.step_id || `step_${String(idx + 1).padStart(3, "0")}`,
+    step_no: Number(step.step_no || idx + 1)
+  }));
+  recordObject.component_refs = Array.isArray(recordObject.component_refs) ? recordObject.component_refs : [];
 
-  const validation = validateRecipeRecordV2ForDraft(recordObject);
+  const validation = validateElementRecordV3LiteForDraft(recordObject);
   if (!validation.ok) {
     throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
   }
 
   const tx = db.transaction(() => {
     updateVersion.run(
-      input.servings?.trim() ?? version.servings,
+      input.yield?.trim() ?? input.servings?.trim() ?? version.yield ?? version.servings,
       instructions,
       JSON.stringify(recordObject),
       input.change_note?.trim() ?? version.change_note,
@@ -2554,10 +2892,10 @@ export function submitRecipeForReview(versionId: number, actorEmail: string, cha
   if (!version) throw new Error("NOT_FOUND");
   if (version.status !== "DRAFT" && version.status !== "REJECTED") throw new Error("INVALID_STAGE");
   const recipe = db
-    .prepare("SELECT recipe_type, menu_cycle FROM recipes WHERE id = ? LIMIT 1")
-    .get(version.recipe_id) as { recipe_type: "MENU" | "BACKBONE"; menu_cycle: string | null } | undefined;
+    .prepare("SELECT business_type, menu_cycle FROM recipes WHERE id = ? LIMIT 1")
+    .get(version.recipe_id) as { business_type: "MENU" | "BACKBONE"; menu_cycle: string | null } | undefined;
   if (!recipe) throw new Error("NOT_FOUND");
-  if (recipe.recipe_type === "MENU" && !normalizeMenuCycle(recipe.menu_cycle || "")) {
+  if (recipe.business_type === "MENU" && !normalizeMenuCycle(recipe.menu_cycle || "")) {
     throw new Error("MENU_CYCLE_REQUIRED");
   }
 
@@ -2573,7 +2911,7 @@ export function submitRecipeForReview(versionId: number, actorEmail: string, cha
     const compositeValidation = validateCompositeRecordV3Lite(parsedRaw);
     if (!compositeValidation.ok) throw new Error(`INVALID_RECIPE_RECORD:${compositeValidation.errors.join(",")}`);
   } else {
-    const validation = validateRecipeRecordV2(parsedRaw);
+    const validation = validateElementRecordV3Lite(parsedRaw);
     if (!validation.ok) throw new Error(`INVALID_RECIPE_RECORD:${validation.errors.join(",")}`);
   }
 
@@ -2812,7 +3150,8 @@ function buildFohCatalog(filter?: { recipe_type?: "MENU" | "BACKBONE"; menu_cycl
         rv.instructions
       FROM recipes r
       LEFT JOIN recipe_versions rv ON rv.id = r.active_version_id
-      WHERE (? IS NULL OR r.recipe_type = ?)
+      WHERE r.entity_kind = 'COMPOSITE'
+        AND (? IS NULL OR r.recipe_type = ?)
         AND (? IS NULL OR r.menu_cycle = ?)
       ORDER BY r.recipe_type ASC, r.name ASC
     `)
@@ -2833,25 +3172,7 @@ function buildFohCatalog(filter?: { recipe_type?: "MENU" | "BACKBONE"; menu_cycl
       instructions: string | null;
     }>;
 
-  const ingredientStmt = db.prepare(`
-    SELECT name, note
-    FROM recipe_ingredients
-    WHERE recipe_version_id = ?
-    ORDER BY sort_order ASC, id ASC
-  `);
-
-  return rows.map((row) => {
-    const ingredients = row.version_id
-      ? (ingredientStmt.all(row.version_id) as Array<{ name: string; note: string | null }>)
-      : [];
-    const ingredientTexts = ingredients.map((it) => `${it.name}${it.note ? ` ${it.note}` : ""}`);
-    const haystack = `${ingredientTexts.join(" ")} ${row.instructions || ""}`.toLowerCase();
-    return {
-      ...row,
-      ingredients,
-      haystack
-    };
-  });
+  return rows.map((row) => buildFohCatalogEntry(row));
 }
 
 function buildFohCatalogByRecipeIds(recipeIds: number[]) {
@@ -2887,25 +3208,69 @@ function buildFohCatalogByRecipeIds(recipeIds: number[]) {
     }>;
   const byId = new Map(rows.map((row) => [row.recipe_id, row]));
   const orderedRows = recipeIds.map((id) => byId.get(id)).filter(Boolean) as typeof rows;
+  return orderedRows.map((row) => buildFohCatalogEntry(row));
+}
+
+function buildFohCatalogEntry(row: {
+  recipe_id: number;
+  code: string;
+  name: string;
+  recipe_type: "MENU" | "BACKBONE";
+  menu_cycle: string | null;
+  version_id: number | null;
+  version_no: number | null;
+  status: string | null;
+  instructions: string | null;
+}) {
   const ingredientStmt = db.prepare(`
     SELECT name, note
     FROM recipe_ingredients
     WHERE recipe_version_id = ?
     ORDER BY sort_order ASC, id ASC
   `);
+  const componentStmt = db.prepare(`
+    SELECT component_kind, child_recipe_id, child_version_id
+    FROM recipe_version_components
+    WHERE parent_version_id = ?
+    ORDER BY sort_order ASC, id ASC
+  `);
+  const activeVersionStmt = db.prepare("SELECT active_version_id FROM recipes WHERE id = ? LIMIT 1");
+  const instructionStmt = db.prepare("SELECT instructions FROM recipe_versions WHERE id = ? LIMIT 1");
 
-  return orderedRows.map((row) => {
-    const ingredients = row.version_id
-      ? (ingredientStmt.all(row.version_id) as Array<{ name: string; note: string | null }>)
-      : [];
-    const ingredientTexts = ingredients.map((it) => `${it.name}${it.note ? ` ${it.note}` : ""}`);
-    const haystack = `${ingredientTexts.join(" ")} ${row.instructions || ""}`.toLowerCase();
-    return {
-      ...row,
-      ingredients,
-      haystack
-    };
-  });
+  const ingredientBag = new Map<string, { name: string; note: string | null }>();
+  const instructionParts: string[] = [row.instructions || ""];
+
+  if (row.version_id) {
+    const selfIngredients = ingredientStmt.all(row.version_id) as Array<{ name: string; note: string | null }>;
+    for (const item of selfIngredients) ingredientBag.set(`${item.name}__${item.note || ""}`, item);
+
+    const components = componentStmt.all(row.version_id) as Array<{
+      component_kind: "RECIPE_REF" | "REFERENCE_PREP" | "RAW_ITEM" | "FINISH_ITEM";
+      child_recipe_id: number | null;
+      child_version_id: number | null;
+    }>;
+    for (const component of components) {
+      if (component.component_kind !== "RECIPE_REF") continue;
+      const childVersionId = component.child_version_id
+        || (component.child_recipe_id
+          ? (activeVersionStmt.get(component.child_recipe_id) as { active_version_id: number | null } | undefined)?.active_version_id
+          : null);
+      if (!childVersionId) continue;
+      const childIngredients = ingredientStmt.all(childVersionId) as Array<{ name: string; note: string | null }>;
+      for (const item of childIngredients) ingredientBag.set(`${item.name}__${item.note || ""}`, item);
+      const childInstruction = (instructionStmt.get(childVersionId) as { instructions: string | null } | undefined)?.instructions;
+      if (childInstruction) instructionParts.push(childInstruction);
+    }
+  }
+
+  const ingredients = Array.from(ingredientBag.values());
+  const ingredientTexts = ingredients.map((it) => `${it.name}${it.note ? ` ${it.note}` : ""}`);
+  const haystack = `${ingredientTexts.join(" ")} ${instructionParts.join(" ")}`.toLowerCase();
+  return {
+    ...row,
+    ingredients,
+    haystack
+  };
 }
 
 function ensureFohRole(email: string, allowedRoles: RecipeUserRole[]) {
@@ -2936,11 +3301,13 @@ function listDailyMenuRecipeIds(date: string) {
   return rows.map((item) => item.recipe_id);
 }
 
-export function getFohCheckCatalog(input: { date: string; recipe_ids?: number[] }) {
+export function getFohCheckCatalog(input: { date: string; recipe_ids?: number[]; menu_cycle?: string }) {
   const ids = Array.isArray(input.recipe_ids) && input.recipe_ids.length > 0
     ? input.recipe_ids
     : listDailyMenuRecipeIds(input.date);
-  const catalog = ids.length > 0 ? buildFohCatalogByRecipeIds(ids) : buildFohCatalog({ recipe_type: "MENU" });
+  const catalog = ids.length > 0
+    ? buildFohCatalogByRecipeIds(ids)
+    : buildFohCatalog({ recipe_type: "MENU", menu_cycle: input.menu_cycle?.trim() || undefined });
   return catalog.map((item) => ({
     recipe_id: item.recipe_id,
     dish_name: item.name,
@@ -2948,74 +3315,53 @@ export function getFohCheckCatalog(input: { date: string; recipe_ids?: number[] 
   }));
 }
 
-export function getFohMenuByDate(date: string) {
-  const menu = db
-    .prepare("SELECT id, date, source FROM daily_menus WHERE date = ? LIMIT 1")
-    .get(date) as { id: number; date: string; source: string } | undefined;
-
-  const availableRecipes = db
+export function listFohMenuCycles() {
+  const rows = db
     .prepare(`
-      SELECT r.id, r.name AS dish_name, r.recipe_type AS type
-      FROM recipes r
-      LEFT JOIN recipe_versions rv ON rv.id = r.active_version_id
-      WHERE r.recipe_type = 'MENU'
-      ORDER BY r.name ASC
+      SELECT DISTINCT menu_cycle
+      FROM recipes
+      WHERE entity_kind = 'COMPOSITE'
+        AND (business_type = 'MENU' OR recipe_type = 'MENU')
+        AND menu_cycle IS NOT NULL
+        AND TRIM(menu_cycle) <> ''
+      ORDER BY menu_cycle DESC
     `)
-    .all() as Array<{ id: number; dish_name: string; type: "MENU" | "BACKBONE" }>;
+    .all() as Array<{ menu_cycle: string }>;
+  return rows.map((row) => row.menu_cycle);
+}
 
-  if (!menu) {
-    return {
-      menu: null,
-      available_recipes: availableRecipes
-    };
-  }
+export function getFohMenuByDate(date: string, menuCycle?: string) {
+  const availableMenuCycles = listFohMenuCycles();
+  const selectedMenuCycle = String(menuCycle || "").trim() || availableMenuCycles[0] || "";
+  const catalog = selectedMenuCycle
+    ? buildFohCatalog({ recipe_type: "MENU", menu_cycle: selectedMenuCycle })
+    : [];
 
-  const items = db
-    .prepare(`
-      SELECT
-        dmi.id AS item_id,
-        dmi.recipe_id,
-        dmi.sort_order,
-        r.name AS dish_name,
-        rv.id AS version_id
-      FROM daily_menu_items dmi
-      JOIN recipes r ON r.id = dmi.recipe_id
-      LEFT JOIN recipe_versions rv ON rv.id = r.active_version_id
-      WHERE dmi.menu_id = ?
-      ORDER BY dmi.sort_order ASC, dmi.id ASC
-    `)
-    .all(menu.id) as Array<{
-      item_id: number;
-      recipe_id: number;
-      sort_order: number;
-      dish_name: string;
-      version_id: number | null;
-    }>;
-
-  const ingredientStmt = db.prepare(`
-    SELECT name, quantity, unit, note
-    FROM recipe_ingredients
-    WHERE recipe_version_id = ?
-    ORDER BY sort_order ASC, id ASC
-  `);
-  const menuDetail: FohMenuDetail = {
-    id: menu.id,
-    date: menu.date,
-    source: menu.source,
-    items: items.map((item) => ({
-      item_id: item.item_id,
-      recipe_id: item.recipe_id,
-      dish_name: item.dish_name,
-      sort_order: item.sort_order,
-      ingredients: item.version_id
-        ? (ingredientStmt.all(item.version_id) as Array<{ name: string; quantity: string; unit: string; note?: string }>)
-        : []
-    }))
-  };
+  const menuDetail: FohMenuDetail | null = selectedMenuCycle
+    ? {
+        id: 0,
+        date,
+        source: "menu_cycle",
+        items: catalog.map((item, idx) => ({
+          item_id: idx + 1,
+          recipe_id: item.recipe_id,
+          dish_name: item.name,
+          sort_order: idx + 1,
+          ingredients: item.ingredients.map((ingredient) => ({
+            name: ingredient.name,
+            quantity: "",
+            unit: "",
+            note: ingredient.note || ""
+          }))
+        }))
+      }
+    : null;
 
   return {
     menu: menuDetail,
-    available_recipes: availableRecipes
+    available_menu_cycles: availableMenuCycles,
+    selected_menu_cycle: selectedMenuCycle || null,
+    available_recipes: []
   };
 }
 

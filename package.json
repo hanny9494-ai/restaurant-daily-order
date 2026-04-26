@@ -9,7 +9,11 @@
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
+    "deploy:check": "node scripts/deploy-check.mjs",
+    "postgres:migrate": "node scripts/postgres-migrate.mjs",
     "test:recipe-import": "node scripts/recipe-import-regression.mjs",
+    "test:recipe-fullchain": "node scripts/recipe-fullchain-e2e.mjs",
+    "test:recipe-fullchain:py": "python3 scripts/recipe_fullchain_e2e.py",
     "probe:docx-recipe": "python3 scripts/docx_recipe_probe.py",
     "status:daily": "node scripts/project-status.mjs daily",
     "status:event": "node scripts/project-status.mjs event",
@@ -21,12 +25,16 @@
     "status:link": "node scripts/handover-link.mjs",
     "status:push": "node scripts/project-sync.mjs",
     "collect:food-reviews": "node scripts/food-review-collector.mjs",
-    "collect:youtube-transcripts": "python3 scripts/youtube_review_transcriber.py"
+    "collect:youtube-transcripts": "python3 scripts/youtube_review_transcriber.py",
+    "cleanup:recipe-smoke": "node scripts/cleanup-recipe-smoke-data.mjs",
+    "test:recipe-generated-10": "python3 scripts/recipe-10-generated-regression.py"
   },
   "dependencies": {
+    "@types/pg": "^8.18.0",
     "better-sqlite3": "^9.6.0",
     "mammoth": "^1.11.0",
     "next": "^14.2.32",
+    "pg": "^8.20.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "xlsx": "^0.18.5"

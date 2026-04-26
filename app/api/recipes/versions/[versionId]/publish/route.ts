@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { publishRecipeVersion, getRecipeDetail, logRecipeSync } from "@/lib/db";
+import { getRecipeDetailRepo, logRecipeSyncRepo, publishRecipeVersionRepo } from "@/lib/recipe-repo";
 import { pushRecipeToBangwagong } from "@/lib/bangwagong";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
@@ -19,8 +19,8 @@ export async function POST(request: NextRequest, context: { params: { versionId:
   }
   try {
     const body = await request.json();
-    const version = publishRecipeVersion(versionId, String(body.publisher || ""));
-    const recipe = getRecipeDetail(version.recipe_id);
+    const version = await publishRecipeVersionRepo(versionId, String(body.publisher || ""));
+    const recipe = await getRecipeDetailRepo(version.recipe_id);
 
     const syncResult = await pushRecipeToBangwagong({
       event: "RECIPE_PUBLISHED",
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest, context: { params: { versionId:
     });
 
     if (syncResult.skipped) {
-      logRecipeSync({
+      await logRecipeSyncRepo({
         recipe_id: version.recipe_id,
         recipe_version_id: version.id,
         event: "RECIPE_PUBLISHED",
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest, context: { params: { versionId:
         error_message: syncResult.error
       });
     } else if (!syncResult.ok) {
-      logRecipeSync({
+      await logRecipeSyncRepo({
         recipe_id: version.recipe_id,
         recipe_version_id: version.id,
         event: "RECIPE_PUBLISHED",
@@ -47,7 +47,7 @@ export async function POST(request: NextRequest, context: { params: { versionId:
         error_message: syncResult.error
       });
     } else {
-      logRecipeSync({
+      await logRecipeSyncRepo({
         recipe_id: version.recipe_id,
         recipe_version_id: version.id,
         event: "RECIPE_PUBLISHED",

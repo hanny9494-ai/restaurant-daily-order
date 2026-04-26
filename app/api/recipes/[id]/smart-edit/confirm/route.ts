@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { confirmSmartEdit } from "@/lib/db";
+import { confirmSmartEditRepo } from "@/lib/recipe-repo";
 import { requirePermission } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest, context: { params: { id: string
     if (!guard.allowed) {
       return NextResponse.json({ error: guard.error || "FORBIDDEN" }, { status: 403 });
     }
-    const data = confirmSmartEdit({
+    const data = await confirmSmartEditRepo({
       recipe_id: recipeId,
       version_id: Number(body.version_id),
       modified_record: body.modified_record,

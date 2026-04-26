@@ -206,6 +206,13 @@ textarea { min-height: 90px; }
   justify-content: space-between;
 }
 
+.ui24-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .ui24-brand {
   font-size: 18px;
   font-weight: 700;
@@ -224,6 +231,12 @@ textarea { min-height: 90px; }
 .ui24-grid-3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ui24-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -273,6 +286,17 @@ textarea { min-height: 90px; }
 .ui24-btn-ghost:hover {
   background: #2d2d2d;
   border-color: #777;
+}
+
+.ui24-btn-danger {
+  border-color: #991b1b;
+  background: #991b1b;
+  color: #fff;
+}
+
+.ui24-btn-danger:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
 }
 
 .ui24-input,
@@ -391,6 +415,19 @@ textarea { min-height: 90px; }
   padding: 14px;
 }
 
+.ui24-stat-clickable {
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.ui24-stat-clickable:hover,
+.ui24-stat-clickable:focus-visible {
+  border-color: #4b5563;
+  background: #1e2430;
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.18);
+  transform: translateY(-1px);
+}
+
 .ui24-listitem {
   width: 100%;
   text-align: left;
@@ -442,6 +479,27 @@ textarea { min-height: 90px; }
   color: #fde68a;
 }
 
+.ui24-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.56);
+  padding: 20px;
+}
+
+.ui24-drawer {
+  width: min(760px, 100%);
+  height: 100%;
+  overflow: auto;
+  border: 1px solid #333;
+  border-radius: 18px;
+  background: #101010;
+  padding: 18px;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+}
+
 .ui24-stepcard {
   margin-bottom: 10px;
   border: 1px solid #2f2f2f;
@@ -491,10 +549,88 @@ textarea { min-height: 90px; }
   font-weight: 600;
 }
 
+.ui24-recipe-view-shell {
+  display: flex;
+  min-height: 680px;
+}
+
+.ui24-recipe-view-aside {
+  width: 320px;
+  min-width: 320px;
+  border-right: 1px solid #2f2f2f;
+  padding-right: 16px;
+}
+
+.ui24-recipe-view-main {
+  flex: 1;
+  padding: 20px;
+  min-width: 0;
+}
+
+.ui24-sticky-desktop {
+  position: sticky;
+}
+
 @media (max-width: 768px) {
   .ui24-grid-2,
-  .ui24-grid-3 {
+  .ui24-grid-3,
+  .ui24-grid-4 {
     grid-template-columns: 1fr;
+  }
+
+  .ui24-recipe-view-shell {
+    display: block;
+    min-height: auto;
+  }
+
+  .ui24-recipe-view-aside {
+    width: auto;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid #2f2f2f;
+    padding-right: 0;
+  }
+
+  .ui24-recipe-view-main {
+    padding: 14px;
+  }
+
+  .ui24-sticky-desktop {
+    position: static;
+  }
+
+  .ui24-topbar-inner {
+    height: auto;
+    min-height: 56px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .ui24-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    width: 100%;
+  }
+
+  .ui24-nav .ui24-btn,
+  .ui24-nav .ui24-btn.ui24-btn-ghost {
+    width: 100%;
+    min-width: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .ui24-drawer-backdrop {
+    padding: 10px;
+  }
+
+  .ui24-drawer {
+    width: 100%;
+    border-radius: 14px;
   }
 
   .ui24-stepbar {

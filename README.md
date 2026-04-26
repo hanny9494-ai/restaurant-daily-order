@@ -1,13 +1,41 @@
-# 极简餐厅每日下货工具 (Next.js + SQLite)
+# 餐厅管理系统 (Next.js + SQLite / PostgreSQL 准备中)
+
+当前仓库包含：
+- 餐厅管理主系统
+- `V3-lite` 食谱系统
+- `L0-L6` 知识引擎相关能力
 
 ## 启动
-1. 安装 Node.js 18+
+1. 安装 Node.js 20+
 2. 安装依赖：`npm install`
-3. 启动开发：`npm run dev`
-4. 打开：
+3. 复制环境模板：`cp .env.example .env.local`
+4. 运行部署自检：`npm run deploy:check`
+5. 启动开发：`npm run dev`
+6. 打开：
    - `http://localhost:3000/order`
    - `http://localhost:3000/dashboard`
    - `http://localhost:3000/docs`
+   - `http://localhost:3000/recipes`
+
+## 运行时状态
+
+查看：
+- `GET /api/runtime/status`
+
+关键返回：
+- `recipe_store.mode = persistent`
+  - 可用于真实草稿、审批、发布
+- `recipe_store.mode = ephemeral`
+  - 只适合 UI 和解析预览
+- `postgres.configured = true`
+  - 说明已配置 Postgres 连接变量
+  - 当前仓库已补迁移骨架，但业务查询层仍在逐步从 SQLite 迁往 Postgres
+
+当前部署约束：
+- `Vercel + SQLite` 默认是临时库
+- `Render + persistent disk` 可以作为正式可运营环境
+- `Vercel + Postgres` 是下一阶段正式线上方案
+- 后续如果迁到 `Bangwagon / VPS`，建议继续复用同一套 Postgres，不再回退到 SQLite
 
 ## 多端口预留
 - 默认前后端同端口。
@@ -23,6 +51,49 @@
    - 重新部署：`vercel --yes`
 
 支持任一变量名：`DASHSCOPE_API_KEY`、`DASHSCOPE_APIKEY`、`QWEN_API_KEY`。
+
+## MCP 聊天配置
+聊天页入口：
+- `http://localhost:3000/chatbot`
+
+新增环境变量：
+- `MCP_SERVER_COMMAND`
+- `MCP_SERVER_ARGS`，推荐 JSON 数组字符串
+- `MCP_SERVER_CWD`
+- `MCP_PROTOCOL_VERSION`
+- `MCP_CHAT_TOOL`
+- `MCP_MULTI_AGENT_TOOL`
+- `CHAT_MODE`
+
+默认建议：
+- `CHAT_MODE=single`
+- `MCP_CHAT_TOOL=chat`
+
+当前项目的 MCP 约定：
+- Next.js 服务端会通过 `stdio` 启动外部 MCP server
+- 聊天接口会调用配置好的 MCP tool
+- 传给 tool 的参数为 `query`、`conversationId`、`messages`、`mode`
+- tool 返回推荐格式：
+  - `structuredContent.answer`
+  - 可选 `structuredContent.conversationId`
+  - 可选 `structuredContent.agents`
+  - 或直接返回文本内容
+
+## 持久化部署
+
+推荐：
+- 使用 [render.yaml](/Users/jeff/Documents/New%20project/render.yaml) 部署到 Render
+- 数据目录挂载到 `/var/data`
+
+如果走 `Vercel + Postgres`：
+- 先在 Vercel Marketplace 创建 Postgres
+- 配置 `POSTGRES_URL`（或兼容 `DATABASE_URL`）
+- 执行 `npm run postgres:migrate`
+- 再把业务存储层逐步切换到 Postgres
+
+部署说明：
+- [RENDER_DEPLOY_PLAN.md](/Users/jeff/Documents/New%20project/RENDER_DEPLOY_PLAN.md)
+- [RENDER_GO_LIVE_CHECKLIST.md](/Users/jeff/Documents/New%20project/RENDER_GO_LIVE_CHECKLIST.md)
 
 ## API
 - `POST /api/order`
@@ -47,6 +118,7 @@
 发布食谱版本时会尝试 webhook 同步到 bangwagong。请在环境变量中配置：
 - `BANGWAGONG_WEBHOOK_URL`：你的 bangwagong webhook 地址
 - `BANGWAGONG_API_TOKEN`：可选，Bearer Token
+- `BANGWAGONG_WEBHOOK_TOKEN`：兼容别名，二选一即可
 
 前端入口：
 - `http://localhost:3000/recipes`
@@ -56,18 +128,38 @@
 - `BACKBONE`：基础母配方（跨菜单长期复用）
 - `MENU`：季度菜单食谱（创建时建议填写 `menu_cycle`，如 `2026Q2`）
 
-食谱 JSON（v2 固定结构，查看/修改页可编辑）：
-- `meta`：`dish_code`、`dish_name`、`recipe_type`、`menu_cycle`、`plating_image_url`
-- `production`：`servings`、`net_yield_rate`（0~1） 、`key_temperature_points[]`
-- `allergens`：数组
-- `ingredients[]`：`name`、`quantity`、`unit`、`note`
-- `steps[]`：`step_no`、`action`、`time_sec`、`temp_c`、`ccp`、`note`
+食谱 JSON（V3-lite）：
+- `ELEMENT`：
+  - `meta`：`dish_code`、`dish_name`、`display_name`、`aliases`、`entity_kind`、`business_type`、`technique_family`、`menu_cycle`、`plating_image_url`
+  - `production`：`yield`、`net_yield_rate`、`key_temperature_points[]`
+  - `allergens` / `diet_flags`
+  - `ingredients[]`
+  - `steps[]`
+  - `component_refs[]`
+- `COMPOSITE`：
+  - `meta`
+  - `production.serves`
+  - `assembly_components[]`
+  - `assembly_steps[]`
 
-提交审批前会做必填校验（字段缺失会阻止提交）。
-Schema 文件：`schemas/recipe-record-v2.schema.json`（与页面/后端校验对齐）。
+提交审批前会做结构校验。
+Schema 文件：
+- [schemas/element-record-v3-lite.schema.json](/Users/jeff/Documents/New%20project/schemas/element-record-v3-lite.schema.json)
+- [schemas/composite-record-v3-lite.schema.json](/Users/jeff/Documents/New%20project/schemas/composite-record-v3-lite.schema.json)
 
 ## 数据库
-SQLite 文件：`data/app.db`
+
+默认：
+- 食谱系统：`data/app.db`
+- L0 引擎：`data/l0_engine.db`
+
+可通过环境变量改写：
+- `DATA_DIR`
+- `RECIPES_DB_FILE`
+- `L0_DB_FILE`
+- `RECIPES_DB_PROVIDER`
+- `POSTGRES_URL`
+- `DATABASE_URL`
 
 ## 食评采集与分类导出
 - 脚本：`scripts/food-review-collector.mjs`

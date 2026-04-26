@@ -1,8 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { getApiBaseUrl } from "@/lib/config";
+import { mergeMenuCycles, readLocalMenuCycles } from "@/lib/menu-cycles";
+import RecipeWorkbenchShell from "@/components/RecipeWorkbenchShell";
+import RecipeComposeDishPanel from "@/components/RecipeComposeDishPanel";
+import RecipeEditWorkbenchPanel from "@/components/RecipeEditWorkbenchPanel";
 import type { RecipeSummary, RecipeUser, UnitOption } from "@/lib/types";
 
 const FALLBACK_USERS: RecipeUser[] = [
@@ -14,19 +19,24 @@ type ImportedRecipe = {
   meta: {
     dish_code: string;
     dish_name: string;
-    recipe_type: "MENU" | "BACKBONE";
+    display_name: string;
+    aliases: string[];
+    entity_kind: "ELEMENT";
+    business_type: "MENU" | "BACKBONE";
+    technique_family: string;
     menu_cycle: string | null;
     plating_image_url: string;
   };
   production: {
-    servings: string;
+    yield: string;
     net_yield_rate: number;
-    key_temperature_points: Array<{ step: string; temp_c: number; hold_sec: number; note?: string }>;
+    key_temperature_points: Array<{ point_id?: string; step: string; temp_c: number; hold_sec: number; note?: string }>;
   };
   allergens: string[];
   diet_flags?: string[];
   ingredients: Array<{ name: string; quantity: string; unit: string; note?: string }>;
-  steps: Array<{ step_no: number; action: string; time_sec: number; temp_c?: number; note?: string }>;
+  steps: Array<{ step_id?: string; step_no: number; action: string; time_sec: number; temp_c?: number; equipment?: string[]; note?: string }>;
+  component_refs?: Array<Record<string, any>>;
 };
 
 type ImportReview = {
@@ -96,6 +106,11 @@ type RuntimeStatus = {
   provider: string;
   reason: string;
 };
+
+type ImportEditorState = {
+  recipeIndex: number;
+  panel: "meta" | "ingredients" | "steps";
+} | null;
 
 const FALLBACK_UNITS: UnitOption[] = [
   { id: 1, name: "g", is_active: 1 },
@@ -169,16 +184,42 @@ function toBase64FromArrayBuffer(buffer: ArrayBuffer) {
 }
 
 function normalizeImportedRecipe(recipe: ImportedRecipe): ImportedRecipe {
+  const rawMeta = (recipe as any).meta || {};
+  const rawProduction = (recipe as any).production || {};
+  const businessType = rawMeta.business_type === "BACKBONE" || rawMeta.recipe_type === "BACKBONE"
+    ? "BACKBONE"
+    : "MENU";
   return {
     ...recipe,
+    meta: {
+      dish_code: String(rawMeta.dish_code || "").trim(),
+      dish_name: String(rawMeta.dish_name || "").trim(),
+      display_name: String(rawMeta.display_name || rawMeta.dish_name || "").trim(),
+      aliases: Array.isArray(rawMeta.aliases) ? rawMeta.aliases.map((item: unknown) => String(item || "").trim()).filter(Boolean) : [],
+      entity_kind: "ELEMENT",
+      business_type: businessType,
+      technique_family: String(rawMeta.technique_family || "OTHER"),
+      menu_cycle: businessType === "MENU" ? (rawMeta.menu_cycle ? String(rawMeta.menu_cycle).trim() : null) : null,
+      plating_image_url: String(rawMeta.plating_image_url || "")
+    },
+    production: {
+      yield: String(rawProduction.yield || rawProduction.servings || ""),
+      net_yield_rate: Number.isFinite(Number(rawProduction.net_yield_rate)) ? Number(rawProduction.net_yield_rate) : 1,
+      key_temperature_points: Array.isArray(rawProduction.key_temperature_points) ? rawProduction.key_temperature_points : []
+    },
     allergens: Array.isArray(recipe.allergens) ? recipe.allergens : [],
     diet_flags: Array.isArray(recipe.diet_flags) ? recipe.diet_flags : [],
     ingredients: Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0
       ? recipe.ingredients
       : [{ name: "", quantity: "", unit: "", note: "" }],
     steps: Array.isArray(recipe.steps) && recipe.steps.length > 0
-      ? recipe.steps
-      : [{ step_no: 1, action: "", time_sec: 0 }]
+      ? recipe.steps.map((step, idx) => ({
+          ...step,
+          step_id: step.step_id || `step_${String(idx + 1).padStart(3, "0")}`,
+          step_no: Number(step.step_no || idx + 1)
+        }))
+      : [{ step_id: "step_001", step_no: 1, action: "", time_sec: 0 }],
+    component_refs: Array.isArray((recipe as any).component_refs) ? (recipe as any).component_refs : []
   };
 }
 
@@ -196,12 +237,24 @@ function getImportedRecipeAutoTag(recipe: ImportedRecipe) {
   return null;
 }
 
+function getImportIssues(recipe: ImportedRecipe) {
+  const issues: string[] = [];
+  if (!recipe.meta.dish_name.trim()) issues.push("缺菜名");
+  if (recipe.meta.business_type === "MENU" && !String(recipe.meta.menu_cycle || "").trim()) issues.push("缺菜单周期");
+  if (recipe.ingredients.some((item) => !item.name || !item.quantity || !item.unit)) issues.push("原料不完整");
+  if (recipe.steps.some((item) => !item.action)) issues.push("步骤不完整");
+  return issues;
+}
+
 export default function RecipesHubPage() {
   const apiBase = useMemo(() => getApiBaseUrl(), []);
+  const router = useRouter();
+  const [queryString, setQueryString] = useState("");
   const [users, setUsers] = useState<RecipeUser[]>([]);
   const [units, setUnits] = useState<UnitOption[]>([]);
   const [selectedUser, setSelectedUser] = useState("");
   const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
+  const [menuCycles, setMenuCycles] = useState<string[]>([]);
   const [recipeFilter, setRecipeFilter] = useState<"ALL" | "MENU" | "BACKBONE">("ALL");
 
   const [importText, setImportText] = useState("");
@@ -210,13 +263,13 @@ export default function RecipesHubPage() {
   const [importRecipes, setImportRecipes] = useState<ImportedRecipe[]>([]);
   const [importReview, setImportReview] = useState<ImportReview | null>(null);
   const [importV3Preview, setImportV3Preview] = useState<V3Preview | null>(null);
-  const [activeDraftIndex, setActiveDraftIndex] = useState(0);
-  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+    const [importEditor, setImportEditor] = useState<ImportEditorState>(null);
   const [dragActive, setDragActive] = useState(false);
   const [importStage, setImportStage] = useState<ImportStage>("idle");
   const [importNotice, setImportNotice] = useState<{ type: "info" | "success" | "error"; text: string } | null>(null);
   const [lastUploadName, setLastUploadName] = useState("");
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [showImportAdvanced, setShowImportAdvanced] = useState(false);
   const activeActorEmail = selectedUser || users.find((user) => user.is_active === 1)?.email || FALLBACK_USERS[0].email;
 
   async function loadUsers() {
@@ -253,10 +306,15 @@ export default function RecipesHubPage() {
   async function loadRecipes() {
     const res = await fetch(`${apiBase}/api/recipes`);
     const json = await res.json();
-    setRecipes((json.data || []) as RecipeSummary[]);
+    const data = (json.data || []) as RecipeSummary[];
+    setRecipes(data);
+    setMenuCycles(mergeMenuCycles(data.map((item) => item.menu_cycle), readLocalMenuCycles()));
   }
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      setQueryString(window.location.search);
+    }
     loadUsers();
     loadUnits();
     loadRecipes();
@@ -269,9 +327,8 @@ export default function RecipesHubPage() {
   const isEphemeralStore = runtimeStatus?.mode === "ephemeral";
   const filteredRecipes = useMemo(() => {
     if (recipeFilter === "ALL") return recipes;
-    return recipes.filter((item) => item.recipe_type === recipeFilter);
+    return recipes.filter((item) => item.business_type === recipeFilter);
   }, [recipeFilter, recipes]);
-  const activeDraft = importRecipes[activeDraftIndex] || null;
   const importMetrics = useMemo(() => {
     const ingredientCount = importRecipes.reduce((sum, recipe) => sum + recipe.ingredients.length, 0);
     const stepCount = importRecipes.reduce((sum, recipe) => sum + recipe.steps.length, 0);
@@ -307,15 +364,74 @@ export default function RecipesHubPage() {
     if (importLoading) {
       return "当前仍在处理中，请等待。";
     }
-    if (importReview?.needs_manual_review && !reviewConfirmed) {
-      return "请先勾选“我已人工审阅配方、原料和步骤”。";
+    if (importRecipes.length < 1) {
+      return "请先完成导入。";
     }
     return "";
-  }, [importLoading, importReview, reviewConfirmed, isEphemeralStore, runtimeStatus]);
+  }, [importLoading, importRecipes.length, isEphemeralStore, runtimeStatus]);
   const isConfirmBlocked = Boolean(confirmBlockedReason);
 
   function patchImportedRecipe(index: number, patch: Partial<ImportedRecipe>) {
     setImportRecipes((prev) => prev.map((item, idx) => idx === index ? { ...item, ...patch } : item));
+  }
+
+  function updateImportedRecipeMeta(index: number, patch: Partial<ImportedRecipe["meta"]>) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => idx === index ? {
+      ...recipe,
+      meta: { ...recipe.meta, ...patch }
+    } : recipe));
+  }
+
+  function updateImportedIngredient(index: number, ingredientIndex: number, patch: Partial<ImportedRecipe["ingredients"][number]>) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => idx === index ? {
+      ...recipe,
+      ingredients: recipe.ingredients.map((ingredient, currentIdx) => currentIdx === ingredientIndex ? { ...ingredient, ...patch } : ingredient)
+    } : recipe));
+  }
+
+  function addImportedIngredient(index: number) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => idx === index ? {
+      ...recipe,
+      ingredients: [...recipe.ingredients, { name: "", quantity: "", unit: "", note: "" }]
+    } : recipe));
+  }
+
+  function removeImportedIngredient(index: number, ingredientIndex: number) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => {
+      if (idx !== index) return recipe;
+      const next = recipe.ingredients.filter((_, currentIdx) => currentIdx !== ingredientIndex);
+      return {
+        ...recipe,
+        ingredients: next.length > 0 ? next : [{ name: "", quantity: "", unit: "", note: "" }]
+      };
+    }));
+  }
+
+  function updateImportedStep(index: number, stepIndex: number, patch: Partial<ImportedRecipe["steps"][number]>) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => idx === index ? {
+      ...recipe,
+      steps: recipe.steps.map((step, currentIdx) => currentIdx === stepIndex ? { ...step, ...patch } : step)
+    } : recipe));
+  }
+
+  function addImportedStep(index: number) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => idx === index ? {
+      ...recipe,
+      steps: [...recipe.steps, { step_id: `step_${String(recipe.steps.length + 1).padStart(3, "0")}`, step_no: recipe.steps.length + 1, action: "", time_sec: 0 }]
+    } : recipe));
+  }
+
+  function removeImportedStep(index: number, stepIndex: number) {
+    setImportRecipes((prev) => prev.map((recipe, idx) => {
+      if (idx !== index) return recipe;
+      const next = recipe.steps
+        .filter((_, currentIdx) => currentIdx !== stepIndex)
+        .map((step, order) => ({ ...step, step_no: order + 1, step_id: step.step_id || `step_${String(order + 1).padStart(3, "0")}` }));
+      return {
+        ...recipe,
+        steps: next.length > 0 ? next : [{ step_id: "step_001", step_no: 1, action: "", time_sec: 0 }]
+      };
+    }));
   }
 
   function toggleRecipeTag(index: number, field: "allergens" | "diet_flags", value: string) {
@@ -362,11 +478,9 @@ export default function RecipesHubPage() {
       }
       const parsed = (json.recipes || []).map(normalizeImportedRecipe);
       setImportRecipes(parsed);
-      setActiveDraftIndex(0);
       setImportWarnings(json.warnings || []);
       setImportReview(json.review || null);
       setImportV3Preview(json.v3_preview || null);
-      setReviewConfirmed(false);
       if (parsed.length > 0) {
         setImportStage(json.review?.needs_manual_review ? "review" : "ready");
         setImportNotice({ type: "success", text: `解析成功：识别到 ${parsed.length} 个食谱。` });
@@ -416,11 +530,9 @@ export default function RecipesHubPage() {
       }
       const parsed = (json.recipes || []).map(normalizeImportedRecipe);
       setImportRecipes(parsed);
-      setActiveDraftIndex(0);
       setImportWarnings(json.warnings || []);
       setImportReview(json.review || null);
       setImportV3Preview(json.v3_preview || null);
-      setReviewConfirmed(false);
       if (parsed.length > 0) {
         setImportStage(json.review?.needs_manual_review ? "review" : "ready");
         setImportNotice({ type: "success", text: `解析成功：识别到 ${parsed.length} 个食谱。` });
@@ -440,7 +552,7 @@ export default function RecipesHubPage() {
 
   async function confirmImport() {
     if (!activeActorEmail) {
-      alert("请先选择操作人");
+      alert("当前操作人未就绪，请刷新后重试");
       return;
     }
     if (isEphemeralStore) {
@@ -457,7 +569,7 @@ export default function RecipesHubPage() {
         alert(`第 ${i + 1} 条菜名为空`);
         return;
       }
-      if (recipe.meta.recipe_type === "MENU" && !String(recipe.meta.menu_cycle || "").trim()) {
+      if (recipe.meta.business_type === "MENU" && !String(recipe.meta.menu_cycle || "").trim()) {
         alert(`第 ${i + 1} 条是 MENU，菜单周期不能为空`);
         return;
       }
@@ -475,10 +587,11 @@ export default function RecipesHubPage() {
       const draftItems = importRecipes.map((recipe) => ({
         dish_name: recipe.meta.dish_name,
         dish_code: recipe.meta.dish_code,
-        recipe_type: recipe.meta.recipe_type,
+        business_type: recipe.meta.business_type,
+        technique_family: recipe.meta.technique_family,
         menu_cycle: recipe.meta.menu_cycle,
         plating_image_url: recipe.meta.plating_image_url,
-        servings: recipe.production.servings,
+        yield: recipe.production.yield,
         net_yield_rate: recipe.production.net_yield_rate,
         allergens: recipe.allergens,
         diet_flags: recipe.diet_flags,
@@ -491,7 +604,8 @@ export default function RecipesHubPage() {
         body: JSON.stringify({
           draft_items: draftItems,
           actor_email: activeActorEmail,
-          v3_preview: importV3Preview
+          v3_preview: importV3Preview,
+          auto_submit: true
         })
       });
       const json = await res.json().catch(() => ({}));
@@ -499,7 +613,7 @@ export default function RecipesHubPage() {
         alert(`创建失败: ${json.error || "UNKNOWN_ERROR"}`);
         return;
       }
-      alert(`成功创建 ${json.created?.length || 0} 个草稿`);
+      const submittedCount = Array.isArray(json.submitted) ? json.submitted.length : 0;
       setImportStage("idle");
       setImportRecipes([]);
       setImportWarnings([]);
@@ -507,38 +621,99 @@ export default function RecipesHubPage() {
       setLastUploadName("");
       setImportReview(null);
       setImportV3Preview(null);
-      setActiveDraftIndex(0);
-      setReviewConfirmed(false);
-      setImportNotice({ type: "success", text: `已创建 ${json.created?.length || 0} 个草稿。` });
+      setImportEditor(null);
+      setImportNotice({ type: "success", text: `已提交 ${submittedCount || json.created?.length || 0} 条审批记录。` });
       await loadRecipes();
+      router.push("/recipes/approvals");
     } finally {
       setImportLoading(false);
     }
   }
 
-  return (
-    <div className="ui24-body">
-      <header className="ui24-topbar">
-        <div className="ui24-topbar-inner">
-          <div className="ui24-brand">食谱系统</div>
-          <Link href="/" className="ui24-btn ui24-btn-ghost">返回首页</Link>
+  const workbenchMode: "import" | "elements" | "compose" = (() => {
+    const raw = new URLSearchParams(queryString).get("mode");
+    if (raw === "elements" || raw === "edit" || raw === "create") return "elements";
+    if (raw === "compose" || raw === "menus") return "compose";
+    return "import";
+  })();
+
+  function openWorkbenchMode(mode: "import" | "elements" | "compose") {
+    const params = new URLSearchParams(queryString);
+    if (mode === "import") {
+      params.delete("mode");
+      params.delete("recipeId");
+      params.delete("versionId");
+    } else if (mode === "compose") {
+      params.set("mode", mode);
+      params.delete("recipeId");
+      params.delete("versionId");
+    } else {
+      params.set("mode", mode);
+    }
+    const nextUrl = `/recipes${params.toString() ? `?${params.toString()}` : ""}`;
+    setQueryString(params.toString() ? `?${params.toString()}` : "");
+    router.push(nextUrl);
+  }
+
+  const workbenchModeSwitch = (
+    <section className="ui24-card" style={{ marginBottom: 14 }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <button className={workbenchMode === "import" ? "ui24-btn" : "ui24-btn ui24-btn-ghost"} type="button" onClick={() => openWorkbenchMode("import")}>导入</button>
+          <button className={workbenchMode === "elements" ? "ui24-btn" : "ui24-btn ui24-btn-ghost"} type="button" onClick={() => openWorkbenchMode("elements")}>修改子配方</button>
+          <button className={workbenchMode === "compose" ? "ui24-btn" : "ui24-btn ui24-btn-ghost"} type="button" onClick={() => openWorkbenchMode("compose")}>组装菜式</button>
         </div>
-      </header>
+      </div>
+    </section>
+  );
 
-      <main className="ui24-wrap">
+  if (workbenchMode === "elements") {
+    return (
+      <RecipeWorkbenchShell
+        current="hub"
+        title="录入工作台"
+        description="搜索并修改子配方，只改 Element 内容。"
+      >
+        {workbenchModeSwitch}
+        <Suspense fallback={null}>
+          <RecipeEditWorkbenchPanel elementOnly />
+        </Suspense>
+      </RecipeWorkbenchShell>
+    );
+  }
+
+  if (workbenchMode === "compose") {
+    return (
+      <RecipeWorkbenchShell
+        current="hub"
+        title="录入工作台"
+        description="只负责组装母菜单结构，不改子配方原料和步骤。"
+      >
+        {workbenchModeSwitch}
+        <RecipeComposeDishPanel />
+      </RecipeWorkbenchShell>
+    );
+  }
+
+  return (
+    <RecipeWorkbenchShell
+      current="hub"
+      title="录入工作台"
+      description="上传、修正、提交审批。"
+    >
+      {workbenchModeSwitch}
         <section className="ui24-card" style={{ marginBottom: 14 }}>
-          <h2 style={{ marginBottom: 10 }}>页面入口</h2>
-          <div className="row">
-            <Link href="/recipes/new" className="ui24-btn">食谱增加</Link>
-            <Link href="/recipes/view" className="ui24-btn ui24-btn-ghost">食谱查看/修改</Link>
-            <Link href="/recipes/approvals" className="ui24-btn ui24-btn-ghost">审批中心</Link>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <h2 style={{ marginBottom: 0 }}>导入</h2>
+            <button
+              className="ui24-btn ui24-btn-ghost"
+              type="button"
+              onClick={() => setShowImportAdvanced((prev) => !prev)}
+            >
+              {showImportAdvanced ? "隐藏高级设置" : "高级设置"}
+            </button>
           </div>
-        </section>
-
-        <section className="ui24-card" style={{ marginBottom: 14 }}>
-          <h2 style={{ marginBottom: 10 }}>智能导入</h2>
-          <p className="ui24-muted" style={{ marginBottom: 10 }}>AI 先提取成列表草稿，人工审核后再转换 JSON 入库</p>
-          <div className="ui24-statusbar">
+          <div className="ui24-statusbar" style={{ marginBottom: 10 }}>
             <div className={`ui24-pill ${
               importStage === "error" ? "ui24-pill-error" :
               importStage === "ready" ? "ui24-pill-success" :
@@ -547,36 +722,14 @@ export default function RecipesHubPage() {
             }`}>
               当前状态：{stageLabel}
             </div>
-            {lastUploadName && <div className="ui24-muted">文件：{lastUploadName}</div>}
+            {lastUploadName ? <div className="ui24-muted">{lastUploadName}</div> : null}
           </div>
           {isEphemeralStore && (
             <div className="ui24-banner ui24-banner-warn">
-              当前是临时数据库环境：可测试上传、解析、结构预览；不要把“确认创建草稿 / 审批中心”当正式结果。
+              当前是临时数据库环境：可测试上传、解析、结构预览；不要把“提交审批”当正式结果。
               {runtimeStatus?.reason ? ` ${runtimeStatus.reason}` : ""}
             </div>
           )}
-          <div className="ui24-grid-2" style={{ gap: 10, marginBottom: 14 }}>
-            <div className="ui24-card" style={{ background: "#171717" }}>
-              <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>步骤 1</div>
-              <div style={{ color: "#fff", fontWeight: 700, marginBottom: 4 }}>上传食谱</div>
-              <div className="ui24-muted">拖拽或粘贴整份食谱，先拿到结构化草稿。</div>
-            </div>
-            <div className="ui24-card" style={{ background: "#171717" }}>
-              <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>步骤 2</div>
-              <div style={{ color: "#fff", fontWeight: 700, marginBottom: 4 }}>看结构总览</div>
-              <div className="ui24-muted">先确认是复合菜还是基础库，再决定是否逐条修。</div>
-            </div>
-            <div className="ui24-card" style={{ background: "#171717" }}>
-              <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>步骤 3</div>
-              <div style={{ color: "#fff", fontWeight: 700, marginBottom: 4 }}>只改当前草稿</div>
-              <div className="ui24-muted">左侧选中一条，右侧只改当前配方，减少干扰。</div>
-            </div>
-            <div className="ui24-card" style={{ background: "#171717" }}>
-              <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}>步骤 4</div>
-              <div style={{ color: "#fff", fontWeight: 700, marginBottom: 4 }}>确认创建</div>
-              <div className="ui24-muted">审核完成后再入库，不在这里直接写底层 JSON。</div>
-            </div>
-          </div>
           {importNotice && (
             <div className={`ui24-banner ${
               importNotice.type === "error" ? "ui24-banner-error" :
@@ -588,34 +741,26 @@ export default function RecipesHubPage() {
           )}
           {importReview?.needs_manual_review && (
             <div className="ui24-banner ui24-banner-warn">
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                检测到复杂导入，请先人工审阅
-              </div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>复杂导入，建议先审一下结果</div>
               <div className="ui24-muted" style={{ marginBottom: 6 }}>
                 识别到 {importReview.detected_recipe_count} 条配方，Components {importReview.detected_components_count} 项
               </div>
               {importReview.reasons.map((reason, idx) => (
                 <div key={`reason-${idx}`} style={{ marginBottom: 4 }}>- {reason}</div>
               ))}
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-                <input
-                  type="checkbox"
-                  checked={reviewConfirmed}
-                  onChange={(e) => setReviewConfirmed(e.target.checked)}
-                />
-                我已人工审阅配方、原料和步骤
-              </label>
             </div>
           )}
 
-          <div style={{ marginBottom: 10 }}>
-            <label className="ui24-label">操作人</label>
-            <select className="ui24-select" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} style={{ maxWidth: 420 }}>
-              {users.map((user) => (
-                <option key={user.id} value={user.email}>{user.name} / {user.role}</option>
-              ))}
-            </select>
-          </div>
+          {showImportAdvanced && (
+            <div style={{ marginBottom: 10 }}>
+              <label className="ui24-label">操作人</label>
+              <select className="ui24-select" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} style={{ maxWidth: 420 }}>
+                {users.map((user) => (
+                  <option key={user.id} value={user.email}>{user.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div
             className={`ui24-dropzone ${dragActive ? "ui24-dropzone-active" : ""}`}
@@ -677,75 +822,66 @@ export default function RecipesHubPage() {
 
         {importV3Preview && (
           <section className="ui24-card" style={{ marginBottom: 14 }}>
-            <h2 style={{ marginBottom: 10 }}>V3 结构总览</h2>
-            <p className="ui24-muted" style={{ marginTop: 0, marginBottom: 10 }}>
-              模式：{importV3Preview.mode} / 来源：{importV3Preview.source_pattern}
-            </p>
-            <div className="ui24-grid-2" style={{ gap: 10, marginBottom: 10 }}>
-              <div className="ui24-stat">
-                <div className="ui24-muted">识别草稿数</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#fff" }}>{importMetrics.recipeCount}</div>
-              </div>
-              <div className="ui24-stat">
-                <div className="ui24-muted">总原料 / 总步骤</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#fff" }}>{importMetrics.ingredientCount} / {importMetrics.stepCount}</div>
-              </div>
-              <div className="ui24-stat">
-                <div className="ui24-muted">Garnish / Plating 标记</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#fff" }}>{importMetrics.taggedCount}</div>
-              </div>
-              <div className="ui24-stat">
-                <div className="ui24-muted">未解析引用</div>
-                <div style={{ fontSize: 28, fontWeight: 800, color: "#fff" }}>{importMetrics.unresolvedRefCount}</div>
-              </div>
-            </div>
-            {importV3Preview.composite && (
-              <div className="ui24-card" style={{ background: "#1f1f1f", marginBottom: 10 }}>
-                <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6 }}>
-                  Composite：{importV3Preview.composite.display_name}
+            <details>
+              <summary style={{ cursor: "pointer", fontWeight: 700, color: "#fff" }}>
+                结构总览（可选） · {importV3Preview.mode} · {importMetrics.recipeCount} 条
+              </summary>
+              <div style={{ marginTop: 12 }}>
+                <div className="ui24-grid-2" style={{ gap: 10, marginBottom: 10 }}>
+                  <div className="ui24-stat">
+                    <div className="ui24-muted">总原料 / 总步骤</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: "#fff" }}>{importMetrics.ingredientCount} / {importMetrics.stepCount}</div>
+                  </div>
+                  <div className="ui24-stat">
+                    <div className="ui24-muted">未解析引用 / 补充项</div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: "#fff" }}>{importMetrics.unresolvedRefCount} / {importV3Preview.finish_items.length}</div>
+                  </div>
                 </div>
-                <div className="ui24-muted" style={{ marginBottom: 4 }}>
-                  code: {importV3Preview.composite.dish_code}
-                </div>
-                <div className="ui24-muted" style={{ marginBottom: 8 }}>
-                  assembly components: {importV3Preview.composite.assembly_components.length} / assembly steps: {importV3Preview.composite.assembly_steps.length}
-                </div>
-              </div>
-            )}
-            <div className="ui24-grid-2">
-              <div>
-                <label className="ui24-label">Elements</label>
-                <div className="ui24-card" style={{ background: "#1f1f1f" }}>
-                  {importV3Preview.elements.map((item) => (
-                    <div key={`v3-el-${item.index}`} style={{ padding: "8px 0", borderBottom: "1px solid #2f2f2f" }}>
-                      <div style={{ color: "#fff", fontWeight: 600 }}>{item.display_name}</div>
-                      <div className="ui24-muted">{item.technique_family} / {item.component_role} / {item.section}</div>
-                      <div className="ui24-muted">{item.dish_code}</div>
+                {importV3Preview.composite && (
+                  <div className="ui24-card" style={{ background: "#1f1f1f", marginBottom: 10 }}>
+                    <div style={{ fontWeight: 700, color: "#fff", marginBottom: 6 }}>
+                      Composite：{importV3Preview.composite.display_name}
                     </div>
-                  ))}
+                    <div className="ui24-muted">
+                      components {importV3Preview.composite.assembly_components.length} / steps {importV3Preview.composite.assembly_steps.length}
+                    </div>
+                  </div>
+                )}
+                <div className="ui24-grid-2">
+                  <div>
+                    <label className="ui24-label">Elements</label>
+                    <div className="ui24-card" style={{ background: "#1f1f1f" }}>
+                      {importV3Preview.elements.map((item) => (
+                        <div key={`v3-el-${item.index}`} style={{ padding: "8px 0", borderBottom: "1px solid #2f2f2f" }}>
+                          <div style={{ color: "#fff", fontWeight: 600 }}>{item.display_name}</div>
+                          <div className="ui24-muted">{item.technique_family} / {item.component_role}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="ui24-label">Refs / Finish Items</label>
+                    <div className="ui24-card" style={{ background: "#1f1f1f" }}>
+                      {importV3Preview.unresolved_refs.length < 1 && importV3Preview.finish_items.length < 1 && (
+                        <div className="ui24-muted">未识别到额外引用</div>
+                      )}
+                      {importV3Preview.unresolved_refs.map((item) => (
+                        <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid #2f2f2f" }}>
+                          <div style={{ color: "#fff", fontWeight: 600 }}>{item.ref_name}</div>
+                          <div className="ui24-muted">REFERENCE_PREP</div>
+                        </div>
+                      ))}
+                      {importV3Preview.finish_items.map((item) => (
+                        <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid #2f2f2f" }}>
+                          <div style={{ color: "#fff", fontWeight: 600 }}>{item.ref_name}</div>
+                          <div className="ui24-muted">FINISH_ITEM</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div>
-                <label className="ui24-label">Refs / Finish Items</label>
-                <div className="ui24-card" style={{ background: "#1f1f1f" }}>
-                  {importV3Preview.unresolved_refs.length < 1 && importV3Preview.finish_items.length < 1 && (
-                    <div className="ui24-muted">未识别到额外引用</div>
-                  )}
-                  {importV3Preview.unresolved_refs.map((item) => (
-                    <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid #2f2f2f" }}>
-                      <div style={{ color: "#fff", fontWeight: 600 }}>{item.ref_name}</div>
-                      <div className="ui24-muted">REFERENCE_PREP {item.source_ref ? `/ ${item.source_ref}` : ""}</div>
-                    </div>
-                  ))}
-                  {importV3Preview.finish_items.map((item) => (
-                    <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid #2f2f2f" }}>
-                      <div style={{ color: "#fff", fontWeight: 600 }}>{item.ref_name}</div>
-                      <div className="ui24-muted">FINISH_ITEM {item.quantity || item.unit ? `/ ${item.quantity || ""} ${item.unit || ""}` : ""}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+            </details>
           </section>
         )}
 
@@ -753,283 +889,111 @@ export default function RecipesHubPage() {
           <section className="ui24-card" style={{ marginBottom: 14 }}>
             <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
               <div>
-                <h2 style={{ margin: 0 }}>AI 提取草稿工作台</h2>
-                <p className="ui24-muted" style={{ margin: "6px 0 0" }}>左侧切换草稿，右侧只改当前项。</p>
+                <h2 style={{ margin: 0 }}>导入结果预览</h2>
+                <p className="ui24-muted" style={{ margin: "6px 0 0" }}>先看结果，再分别修原料和步骤。</p>
               </div>
-              <div className="ui24-muted">当前选中：{activeDraft ? activeDraft.meta.dish_name || "未命名草稿" : "-"}</div>
+              <div className="ui24-muted">{importRecipes.length} 条待确认</div>
             </div>
-            <div className="ui24-grid-2" style={{ alignItems: "start", gap: 14 }}>
-              <div className="ui24-card" style={{ background: "#171717" }}>
-                <label className="ui24-label">草稿列表</label>
-                {importRecipes.map((recipe, idx) => {
-                  const autoTag = getImportedRecipeAutoTag(recipe);
-                  const isActive = idx === activeDraftIndex;
-                  return (
-                    <button
-                      key={`import-tab-${idx}`}
-                      type="button"
-                      onClick={() => setActiveDraftIndex(idx)}
-                      className={`ui24-listitem ${isActive ? "ui24-listitem-active" : ""}`}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
-                        <div style={{ fontWeight: 700 }}>{idx + 1}. {recipe.meta.dish_name || "未命名草稿"}</div>
-                        <div className="ui24-muted">{recipe.meta.recipe_type}</div>
+            <div style={{ display: "grid", gap: 12 }}>
+              {importRecipes.map((recipe, idx) => {
+                const autoTag = getImportedRecipeAutoTag(recipe);
+                const issues = getImportIssues(recipe);
+                const isEditing = importEditor?.recipeIndex === idx;
+                return (
+                  <div
+                    key={`import-card-${idx}`}
+                    className="ui24-card"
+                    style={{
+                      background: isEditing ? "#202734" : "#171717",
+                      borderColor: isEditing ? "#2563eb" : "#333"
+                    }}
+                  >
+                    <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 4 }}>食谱 {idx + 1}</div>
+                        <div style={{
+                          color: "#fff",
+                          fontWeight: 800,
+                          fontSize: 20,
+                          lineHeight: 1.3,
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                          maxWidth: "100%"
+                        }}>
+                          {recipe.meta.dish_name || "未命名食谱"}
+                        </div>
+                        <div className="ui24-muted" style={{ marginTop: 4 }}>{recipe.meta.business_type} / {recipe.meta.technique_family || "OTHER"}</div>
                       </div>
-                      <div className="ui24-muted" style={{ marginBottom: 4 }}>
-                        {recipe.ingredients.length} 原料 / {recipe.steps.length} 步骤 / {recipe.allergens.length} 过敏原
-                      </div>
-                      {autoTag && <div style={{ fontSize: 12, color: autoTag.color }}>{autoTag.label}</div>}
-                    </button>
-                  );
-                })}
-              </div>
+                      {autoTag && (
+                        <div
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            padding: "4px 10px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: autoTag.color,
+                            background: autoTag.bg,
+                            border: `1px solid ${autoTag.color}`
+                          }}
+                        >
+                          {autoTag.label}
+                        </div>
+                      )}
+                    </div>
 
-              {activeDraft && (
-                <div className="ui24-card" style={{ background: "#1f1f1f" }}>
-                  {getImportedRecipeAutoTag(activeDraft) && (
-                    <div
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                        marginBottom: 10,
-                        fontSize: 12,
-                        fontWeight: 700,
-                        letterSpacing: 0.3,
-                        color: getImportedRecipeAutoTag(activeDraft)?.color,
-                        background: getImportedRecipeAutoTag(activeDraft)?.bg,
-                        border: `1px solid ${getImportedRecipeAutoTag(activeDraft)?.color}`
-                      }}
-                    >
-                      {getImportedRecipeAutoTag(activeDraft)?.label}
+                    <div className="ui24-grid-3" style={{ marginBottom: 10 }}>
+                      <button
+                        type="button"
+                        className="ui24-stat ui24-stat-clickable"
+                        style={{ textAlign: "left", cursor: "pointer" }}
+                        onClick={() => setImportEditor({ recipeIndex: idx, panel: "ingredients" })}
+                      >
+                        <div className="ui24-muted">原料</div>
+                        <div style={{ color: "#fff", fontSize: 22, fontWeight: 800 }}>{recipe.ingredients.length}</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="ui24-stat ui24-stat-clickable"
+                        style={{ textAlign: "left", cursor: "pointer" }}
+                        onClick={() => setImportEditor({ recipeIndex: idx, panel: "steps" })}
+                      >
+                        <div className="ui24-muted">步骤</div>
+                        <div style={{ color: "#fff", fontSize: 22, fontWeight: 800 }}>{recipe.steps.length}</div>
+                      </button>
+                      <button
+                        type="button"
+                        className="ui24-stat ui24-stat-clickable"
+                        style={{ textAlign: "left", cursor: "pointer" }}
+                        onClick={() => setImportEditor({ recipeIndex: idx, panel: "meta" })}
+                      >
+                        <div className="ui24-muted">菜单周期</div>
+                        <div style={{ color: "#fff", fontSize: 18, fontWeight: 800 }}>{recipe.meta.menu_cycle || "-"}</div>
+                      </button>
                     </div>
-                  )}
-                  <div className="ui24-grid-2">
-                    <div>
-                      <label className="ui24-label">菜名</label>
-                      <input className="ui24-input" value={activeDraft.meta.dish_name} onChange={(e) => patchImportedRecipe(activeDraftIndex, { meta: { ...activeDraft.meta, dish_name: e.target.value } })} />
-                    </div>
-                    <div>
-                      <label className="ui24-label">编码</label>
-                      <input className="ui24-input" value={activeDraft.meta.dish_code} onChange={(e) => patchImportedRecipe(activeDraftIndex, { meta: { ...activeDraft.meta, dish_code: e.target.value } })} />
-                    </div>
-                  </div>
-                  <div className="ui24-grid-2" style={{ marginTop: 8 }}>
-                    <div>
-                      <label className="ui24-label">业务分类（自动推断）</label>
-                      <div className="ui24-stat" style={{ minHeight: 72 }}>
-                        <div style={{ color: "#fff", fontSize: 20, fontWeight: 800 }}>{activeDraft.meta.recipe_type}</div>
-                        <div className="ui24-muted" style={{ marginTop: 4 }}>后续会改成默认隐藏，仅在高级设置中允许人工改。</div>
+
+                    <div style={{ marginBottom: 10 }}>
+                      <div className="ui24-muted" style={{ marginBottom: 6 }}>风险检查</div>
+                      <div className="ui24-taggrid">
+                        {issues.length > 0 ? issues.map((issue) => (
+                          <span key={`${recipe.meta.dish_code}-${issue}`} className="ui24-chip" style={{ borderColor: "#7f1d1d", color: "#fecaca" }}>{issue}</span>
+                        )) : (
+                          <span className="ui24-chip ui24-chip-active">可提交审批</span>
+                        )}
                       </div>
                     </div>
-                    <div>
-                      <label className="ui24-label">菜单周期（MENU 审批前必填）</label>
-                      <input
-                        className="ui24-input"
-                        value={activeDraft.meta.menu_cycle || ""}
-                        disabled={activeDraft.meta.recipe_type !== "MENU"}
-                        onChange={(e) => patchImportedRecipe(activeDraftIndex, { meta: { ...activeDraft.meta, menu_cycle: e.target.value || null } })}
-                      />
+
+                    <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <button className="ui24-btn ui24-btn-ghost" type="button" onClick={() => setImportEditor({ recipeIndex: idx, panel: "meta" })}>
+                        基本信息
+                      </button>
                     </div>
                   </div>
-                  <div className="ui24-grid-2" style={{ marginTop: 8 }}>
-                    <div className="ui24-stat">
-                      <div className="ui24-muted">原料数</div>
-                      <div style={{ color: "#fff", fontSize: 24, fontWeight: 800 }}>{activeDraft.ingredients.length}</div>
-                    </div>
-                    <div className="ui24-stat">
-                      <div className="ui24-muted">步骤数</div>
-                      <div style={{ color: "#fff", fontSize: 24, fontWeight: 800 }}>{activeDraft.steps.length}</div>
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    <label className="ui24-label">过敏源库</label>
-                    <div className="ui24-taggrid">
-                      {ALLERGEN_LIBRARY.map((item) => {
-                        const active = activeDraft.allergens.includes(item);
-                        return (
-                          <button
-                            key={`allergen-${item}`}
-                            type="button"
-                            className={`ui24-chip ${active ? "ui24-chip-active" : ""}`}
-                            onClick={() => toggleRecipeTag(activeDraftIndex, "allergens", item)}
-                          >
-                            {item}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 10 }}>
-                    <label className="ui24-label">饮食限制库</label>
-                    <div className="ui24-taggrid">
-                      {DIET_PROFILE_LIBRARY.map((item) => {
-                        const active = (activeDraft.diet_flags || []).includes(item);
-                        return (
-                          <button
-                            key={`diet-${item}`}
-                            type="button"
-                            className={`ui24-chip ${active ? "ui24-chip-active" : ""}`}
-                            onClick={() => toggleRecipeTag(activeDraftIndex, "diet_flags", item)}
-                          >
-                            {item}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="ui24-muted" style={{ marginTop: 6 }}>
-                      当前仅做前端预览，后续会拆成独立的 diet profile 库并接 FOH 检查。
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 10 }}>
-                    <label className="ui24-label">原料（只编辑当前草稿）</label>
-                    {activeDraft.ingredients.map((ing, ingIdx) => (
-                      <div key={`ing-${activeDraftIndex}-${ingIdx}`} className="ui24-grid-3" style={{ marginBottom: 6 }}>
-                        <input
-                          className="ui24-input"
-                          placeholder="原料名"
-                          value={ing.name}
-                          onChange={(e) => {
-                            setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                              ...r,
-                              ingredients: r.ingredients.map((g, j) => j === ingIdx ? { ...g, name: e.target.value } : g)
-                            } : r));
-                          }}
-                        />
-                        <input
-                          className="ui24-input"
-                          placeholder="数量"
-                          value={ing.quantity}
-                          onChange={(e) => {
-                            setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                              ...r,
-                              ingredients: r.ingredients.map((g, j) => j === ingIdx ? { ...g, quantity: e.target.value } : g)
-                            } : r));
-                          }}
-                        />
-                        <div className="row">
-                          <select
-                            className="ui24-select"
-                            value={ing.unit}
-                            onChange={(e) => {
-                              setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                                ...r,
-                                ingredients: r.ingredients.map((g, j) => j === ingIdx ? { ...g, unit: e.target.value } : g)
-                              } : r));
-                            }}
-                          >
-                            {getUnitChoices(ing.unit).map((unitName) => (
-                              <option key={`unit-${activeDraftIndex}-${ingIdx}-${unitName}`} value={unitName}>{unitName}</option>
-                            ))}
-                          </select>
-                          <button
-                            className="ui24-btn ui24-btn-ghost"
-                            type="button"
-                            onClick={() => {
-                              setImportRecipes((prev) => prev.map((r, i) => {
-                                if (i !== activeDraftIndex) return r;
-                                const next = r.ingredients.filter((_, j) => j !== ingIdx);
-                                return { ...r, ingredients: next.length > 0 ? next : [{ name: "", quantity: "", unit: "", note: "" }] };
-                              }));
-                            }}
-                          >
-                            删
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    <button
-                      className="ui24-btn ui24-btn-ghost"
-                      type="button"
-                      onClick={() => {
-                        setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                          ...r,
-                          ingredients: [...r.ingredients, { name: "", quantity: "", unit: "", note: "" }]
-                        } : r));
-                      }}
-                    >
-                      + 添加原料
-                    </button>
-                  </div>
-                  <div style={{ marginTop: 10 }}>
-                    <label className="ui24-label">步骤（只编辑当前草稿）</label>
-                    {activeDraft.steps.map((step, stepIdx) => (
-                      <div key={`step-${activeDraftIndex}-${stepIdx}`} className="ui24-stepcard">
-                        <div className="ui24-stepbar">
-                          <div className="ui24-stepbadge">步骤 {stepIdx + 1}</div>
-                          <div className="ui24-stepcontrols">
-                            <input
-                              className="ui24-input"
-                              style={{ width: 72 }}
-                              placeholder="序号"
-                              value={String(step.step_no)}
-                              onChange={(e) => {
-                                const n = Number(e.target.value || 0) || stepIdx + 1;
-                                setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                                  ...r,
-                                  steps: r.steps.map((s, j) => j === stepIdx ? { ...s, step_no: n } : s)
-                                } : r));
-                              }}
-                            />
-                            <input
-                              className="ui24-input"
-                              style={{ width: 120 }}
-                              placeholder="时长秒(可空)"
-                              value={step.time_sec > 0 ? String(step.time_sec) : ""}
-                              onChange={(e) => {
-                                const raw = e.target.value.trim();
-                                const n = raw ? Number(raw) : 0;
-                                setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                                  ...r,
-                                  steps: r.steps.map((s, j) => j === stepIdx ? { ...s, time_sec: Number.isFinite(n) ? n : 0 } : s)
-                                } : r));
-                              }}
-                            />
-                            <button
-                              className="ui24-btn ui24-btn-ghost"
-                              type="button"
-                              onClick={() => {
-                                setImportRecipes((prev) => prev.map((r, i) => {
-                                  if (i !== activeDraftIndex) return r;
-                                  const next = r.steps.filter((_, j) => j !== stepIdx);
-                                  return { ...r, steps: next.length > 0 ? next : [{ step_no: 1, action: "", time_sec: 0 }] };
-                                }));
-                              }}
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                        <textarea
-                          className="ui24-textarea"
-                          style={{ minHeight: 64 }}
-                          placeholder="步骤动作"
-                          value={step.action}
-                          onChange={(e) => {
-                            setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                              ...r,
-                              steps: r.steps.map((s, j) => j === stepIdx ? { ...s, action: e.target.value } : s)
-                            } : r));
-                          }}
-                        />
-                      </div>
-                    ))}
-                    <button
-                      className="ui24-btn ui24-btn-ghost"
-                      type="button"
-                      onClick={() => {
-                        setImportRecipes((prev) => prev.map((r, i) => i === activeDraftIndex ? {
-                          ...r,
-                          steps: [...r.steps, { step_no: r.steps.length + 1, action: "", time_sec: 0 }]
-                        } : r));
-                      }}
-                    >
-                      + 添加步骤
-                    </button>
-                  </div>
-                </div>
-              )}
+                );
+              })}
             </div>
             <div className="row" style={{ marginTop: 10 }}>
               <button
@@ -1040,8 +1004,7 @@ export default function RecipesHubPage() {
                   setImportWarnings([]);
                   setImportReview(null);
                   setImportV3Preview(null);
-                  setActiveDraftIndex(0);
-                  setReviewConfirmed(false);
+                  setImportStage("idle");
                 }}
               >
                 清空结果
@@ -1052,7 +1015,7 @@ export default function RecipesHubPage() {
                 onClick={confirmImport}
                 disabled={isConfirmBlocked}
               >
-                {isEphemeralStore ? "当前环境不允许入库" : "确认创建草稿"}
+                {isEphemeralStore ? "当前环境不允许提交" : "提交审批"}
               </button>
             </div>
             {confirmBlockedReason && (
@@ -1063,44 +1026,161 @@ export default function RecipesHubPage() {
           </section>
         )}
 
-        <section className="ui24-card">
-          <h2 style={{ marginBottom: 10 }}>食谱列表</h2>
-          <div className="row" style={{ marginBottom: 10 }}>
-            <select className="ui24-select" value={recipeFilter} onChange={(e) => setRecipeFilter(e.target.value as "ALL" | "MENU" | "BACKBONE")} style={{ maxWidth: 200 }}>
-              <option value="ALL">全部</option>
-              <option value="MENU">MENU</option>
-              <option value="BACKBONE">BACKBONE</option>
-            </select>
-            <button className="ui24-btn ui24-btn-ghost" type="button" onClick={loadRecipes}>刷新列表</button>
+        {importEditor && importRecipes[importEditor.recipeIndex] && (
+          <div className="ui24-drawer-backdrop" onClick={() => setImportEditor(null)}>
+            <div className="ui24-drawer" onClick={(e) => e.stopPropagation()}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                <div>
+                  <h2 style={{ marginBottom: 4 }}>
+                    {importEditor.panel === "meta" ? "基本信息修正" : importEditor.panel === "ingredients" ? "原料修正" : "步骤修正"}
+                  </h2>
+                  <div className="ui24-muted">{importRecipes[importEditor.recipeIndex].meta.dish_name || "未命名食谱"}</div>
+                </div>
+                <button className="ui24-btn ui24-btn-ghost" type="button" onClick={() => setImportEditor(null)}>确认返回</button>
+              </div>
+
+              {importEditor.panel === "meta" && (
+                <>
+                  <div className="ui24-grid-2">
+                    <div className="field">
+                      <label>菜名</label>
+                      <input
+                        className="ui24-input"
+                        value={importRecipes[importEditor.recipeIndex].meta.dish_name}
+                        onChange={(e) => updateImportedRecipeMeta(importEditor.recipeIndex, { dish_name: e.target.value })}
+                      />
+                    </div>
+                    <div className="field">
+                      <label>产出</label>
+                      <input
+                        className="ui24-input"
+                        value={importRecipes[importEditor.recipeIndex].production.yield}
+                        onChange={(e) => patchImportedRecipe(importEditor.recipeIndex, {
+                          production: {
+                            ...importRecipes[importEditor.recipeIndex].production,
+                            yield: e.target.value
+                          }
+                        })}
+                      />
+                    </div>
+                  </div>
+                  <div className="ui24-grid-2" style={{ marginTop: 8 }}>
+                    <div className="field">
+                      <label>业务分类</label>
+                      <select
+                        className="ui24-select"
+                        value={importRecipes[importEditor.recipeIndex].meta.business_type}
+                        onChange={(e) => updateImportedRecipeMeta(importEditor.recipeIndex, { business_type: e.target.value as "MENU" | "BACKBONE" })}
+                      >
+                        <option value="MENU">MENU</option>
+                        <option value="BACKBONE">BACKBONE</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>菜单周期</label>
+                      <select
+                        className="ui24-select"
+                        value={importRecipes[importEditor.recipeIndex].meta.menu_cycle || ""}
+                        onChange={(e) => updateImportedRecipeMeta(importEditor.recipeIndex, { menu_cycle: e.target.value || null })}
+                      >
+                        <option value="">未设置</option>
+                        {menuCycles.map((cycle) => (
+                          <option key={`cycle-${cycle}`} value={cycle}>{cycle}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <details style={{ marginTop: 10 }}>
+                    <summary style={{ cursor: "pointer", color: "#9ca3af" }}>高级字段</summary>
+                    <div style={{ marginTop: 10 }}>
+                      <label className="ui24-label">编码</label>
+                      <input
+                        className="ui24-input"
+                        value={importRecipes[importEditor.recipeIndex].meta.dish_code}
+                        onChange={(e) => updateImportedRecipeMeta(importEditor.recipeIndex, { dish_code: e.target.value })}
+                      />
+                    </div>
+                  </details>
+                  <div style={{ marginTop: 10 }}>
+                    <label className="ui24-label">过敏源</label>
+                    <div className="ui24-taggrid">
+                      {ALLERGEN_LIBRARY.map((item) => {
+                        const active = importRecipes[importEditor.recipeIndex].allergens.includes(item);
+                        return (
+                          <button
+                            key={`drawer-allergen-${item}`}
+                            type="button"
+                            className={`ui24-chip ${active ? "ui24-chip-active" : ""}`}
+                            onClick={() => toggleRecipeTag(importEditor.recipeIndex, "allergens", item)}
+                          >
+                            {item}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <label className="ui24-label">饮食限制</label>
+                    <div className="ui24-taggrid">
+                      {DIET_PROFILE_LIBRARY.map((item) => {
+                        const active = (importRecipes[importEditor.recipeIndex].diet_flags || []).includes(item);
+                        return (
+                          <button
+                            key={`drawer-diet-${item}`}
+                            type="button"
+                            className={`ui24-chip ${active ? "ui24-chip-active" : ""}`}
+                            onClick={() => toggleRecipeTag(importEditor.recipeIndex, "diet_flags", item)}
+                          >
+                            {item}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {importEditor.panel === "ingredients" && (
+                <>
+                  <div className="ui24-muted" style={{ marginBottom: 10 }}>这里只改原料，不展示步骤表单。</div>
+                  {importRecipes[importEditor.recipeIndex].ingredients.map((ingredient, ingredientIndex) => (
+                    <div key={`drawer-ing-${ingredientIndex}`} className="ui24-grid-4" style={{ marginBottom: 8 }}>
+                      <input className="ui24-input" value={ingredient.name} placeholder="名称" onChange={(e) => updateImportedIngredient(importEditor.recipeIndex, ingredientIndex, { name: e.target.value })} />
+                      <input className="ui24-input" value={ingredient.quantity} placeholder="数量" onChange={(e) => updateImportedIngredient(importEditor.recipeIndex, ingredientIndex, { quantity: e.target.value })} />
+                      <select className="ui24-select" value={ingredient.unit} onChange={(e) => updateImportedIngredient(importEditor.recipeIndex, ingredientIndex, { unit: e.target.value })}>
+                        {getUnitChoices(ingredient.unit).map((unitName) => (
+                          <option key={`drawer-unit-${ingredientIndex}-${unitName}`} value={unitName}>{unitName}</option>
+                        ))}
+                      </select>
+                      <div className="row" style={{ gap: 8 }}>
+                        <input className="ui24-input" value={ingredient.note || ""} placeholder="备注" onChange={(e) => updateImportedIngredient(importEditor.recipeIndex, ingredientIndex, { note: e.target.value })} />
+                        <button className="ui24-btn ui24-btn-danger" type="button" onClick={() => removeImportedIngredient(importEditor.recipeIndex, ingredientIndex)}>删除</button>
+                      </div>
+                    </div>
+                  ))}
+                  <button className="ui24-btn ui24-btn-ghost" type="button" onClick={() => addImportedIngredient(importEditor.recipeIndex)}>+ 增加原料</button>
+                </>
+              )}
+
+              {importEditor.panel === "steps" && (
+                <>
+                  <div className="ui24-muted" style={{ marginBottom: 10 }}>这里只改步骤，不展示原料表单。</div>
+                  {importRecipes[importEditor.recipeIndex].steps.map((step, stepIndex) => (
+                    <div key={`drawer-step-${stepIndex}`} className="ui24-card" style={{ background: "#171717", marginBottom: 8 }}>
+                      <div className="row" style={{ gap: 8, alignItems: "center", marginBottom: 8 }}>
+                        <input className="ui24-input" style={{ maxWidth: 92 }} value={String(step.step_no)} onChange={(e) => updateImportedStep(importEditor.recipeIndex, stepIndex, { step_no: Number(e.target.value || stepIndex + 1) })} />
+                        <input className="ui24-input" style={{ maxWidth: 120 }} placeholder="时长秒" value={step.time_sec > 0 ? String(step.time_sec) : ""} onChange={(e) => updateImportedStep(importEditor.recipeIndex, stepIndex, { time_sec: Number(e.target.value || 0) || 0 })} />
+                        <button className="ui24-btn ui24-btn-danger" type="button" onClick={() => removeImportedStep(importEditor.recipeIndex, stepIndex)}>删除</button>
+                      </div>
+                      <textarea className="ui24-textarea" style={{ minHeight: 84 }} value={step.action} placeholder="步骤动作" onChange={(e) => updateImportedStep(importEditor.recipeIndex, stepIndex, { action: e.target.value })} />
+                    </div>
+                  ))}
+                  <button className="ui24-btn ui24-btn-ghost" type="button" onClick={() => addImportedStep(importEditor.recipeIndex)}>+ 增加步骤</button>
+                </>
+              )}
+            </div>
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table className="ui24-table">
-              <thead>
-                <tr>
-                  <th>编码</th>
-                  <th>名称</th>
-                  <th>类型</th>
-                  <th>菜单周期</th>
-                  <th>版本</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRecipes.map((recipe) => (
-                  <tr key={recipe.id}>
-                    <td>{recipe.code}</td>
-                    <td>{recipe.name}</td>
-                    <td>{recipe.recipe_type}</td>
-                    <td>{recipe.menu_cycle || "-"}</td>
-                    <td>{recipe.active_version_no ? `v${recipe.active_version_no}` : "-"}</td>
-                    <td>{recipe.active_status || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </main>
-    </div>
+        )}
+    </RecipeWorkbenchShell>
   );
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createRecipeRevision } from "@/lib/db";
+import { createRecipeRevisionRepo } from "@/lib/recipe-repo";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest, context: { params: { id: string
   }
   try {
     const body = await request.json();
-    const data = createRecipeRevision(recipeId, String(body.created_by || ""));
+    const data = await createRecipeRevisionRepo(recipeId, String(body.created_by || ""));
     return NextResponse.json({ data }, { status: 201 });
   } catch (error: any) {
     const code = String(error?.message || "");

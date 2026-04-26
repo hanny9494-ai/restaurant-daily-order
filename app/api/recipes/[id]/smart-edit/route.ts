@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRecipeDetail } from "@/lib/db";
+import { getRecipeDetailRepo } from "@/lib/recipe-repo";
 import { callQwenJson, resolveQwenModel } from "@/lib/qwen";
 import { buildRecipeSmartEditPrompt } from "@/lib/prompts";
 import { requirePermission } from "@/lib/permissions";
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest, context: { params: { id: string
       return NextResponse.json({ error: "INSTRUCTION_REQUIRED" }, { status: 400 });
     }
 
-    const detail = getRecipeDetail(recipeId);
+    const detail = await getRecipeDetailRepo(recipeId);
     if (!detail) {
       return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     }

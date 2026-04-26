@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateRecipeDraft } from "@/lib/db";
+import { updateRecipeDraftRepo } from "@/lib/recipe-repo";
 import { hasPersistentRecipeStore } from "@/lib/runtime-status";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +18,8 @@ export async function PATCH(request: NextRequest, context: { params: { versionId
   }
   try {
     const body = await request.json();
-    const data = updateRecipeDraft(versionId, {
-      servings: typeof body.servings === "string" ? body.servings : undefined,
+    const data = await updateRecipeDraftRepo(versionId, {
+      yield: typeof body.yield === "string" ? body.yield : (typeof body.servings === "string" ? body.servings : undefined),
       instructions: typeof body.instructions === "string" ? body.instructions : undefined,
       change_note: typeof body.change_note === "string" ? body.change_note : undefined,
       ingredients: Array.isArray(body.ingredients) ? body.ingredients : undefined,

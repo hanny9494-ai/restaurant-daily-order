@@ -10,9 +10,8 @@ export default function UiPage() {
           拖拽上传食谱文件在「食谱系统」页面（/recipes）内，不在本页。
         </p>
         <div className="row">
-          <Link href="/recipes" className="btn">去拖拽上传页（/recipes）</Link>
-          <Link href="/recipes/new" className="btn">食谱增加</Link>
-          <Link href="/recipes/view" className="btn secondary">食谱查看 / 修改（JSON）</Link>
+          <Link href="/recipes" className="btn">录入工作台</Link>
+          <Link href="/recipes/view" className="btn secondary">查看菜谱</Link>
           <Link href="/foh" className="btn secondary">前厅端口（忌口识别）</Link>
           <Link href="/recipes/approvals" className="btn secondary">审批中心</Link>
         </div>
