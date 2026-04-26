@@ -1,218 +1,320 @@
-# 餐厅管理系统 (Next.js + SQLite / PostgreSQL 准备中)
+# 餐厅业务系统仓库
 
-当前仓库包含：
-- 餐厅管理主系统
-- `V3-lite` 食谱系统
-- `L0-L6` 知识引擎相关能力
+这是一个餐厅内部业务系统总仓库，当前主要包含两条已经成型的主线：
 
-## 启动
-1. 安装 Node.js 20+
-2. 安装依赖：`npm install`
-3. 复制环境模板：`cp .env.example .env.local`
-4. 运行部署自检：`npm run deploy:check`
-5. 启动开发：`npm run dev`
-6. 打开：
-   - `http://localhost:3000/order`
-   - `http://localhost:3000/dashboard`
-   - `http://localhost:3000/docs`
-   - `http://localhost:3000/recipes`
+1. `order`：原有下单/门店运营主系统
+2. `recipes`：新食谱系统（录入、查看、审批）
 
-## 运行时状态
+它们在**同一个仓库**里维护，但在**域名、进程、数据库、使用场景**上已经明确区分。
+
+---
+
+## 一、两个系统如何区分
+
+### 1. 下单系统 `order`
+用途：原有业务主系统，负责下单与既有门店流程。
+
+当前正式入口：
+- [https://order.jify.com.cn](https://order.jify.com.cn)
+
+代码入口：
+- [/Users/jeff/Documents/New project/app/order/page.tsx](/Users/jeff/Documents/New%20project/app/order/page.tsx)
+
+特点：
+- 这是旧主系统
+- 继续独立运行
+- 不和新食谱系统共用前端入口
+
+### 2. 食谱系统 `recipes`
+用途：食谱录入、子配方维护、整道菜查看、审批发布。
+
+当前正式入口：
+- [https://recipes.jify.com.cn/recipes](https://recipes.jify.com.cn/recipes)
+- [https://recipes.jify.com.cn/recipes/view](https://recipes.jify.com.cn/recipes/view)
+- [https://recipes.jify.com.cn/recipes/approvals](https://recipes.jify.com.cn/recipes/approvals)
+
+代码入口：
+- [/Users/jeff/Documents/New project/app/recipes/page.tsx](/Users/jeff/Documents/New%20project/app/recipes/page.tsx)
+- [/Users/jeff/Documents/New project/app/recipes/view/page.tsx](/Users/jeff/Documents/New%20project/app/recipes/view/page.tsx)
+- [/Users/jeff/Documents/New project/app/recipes/approvals/page.tsx](/Users/jeff/Documents/New%20project/app/recipes/approvals/page.tsx)
+
+特点：
+- 新系统
+- 以 `V3-lite` 食谱模型为核心
+- 包含 `ELEMENT` 和 `COMPOSITE`
+- 已独立挂在新域名，不覆盖下单系统
+
+---
+
+## 二、为什么放在同一个仓库里
+
+这是一个餐厅业务 `monorepo`，目的是把同一门店的核心系统放在一起维护：
+
+```text
+app/
+├─ order/        下单系统
+├─ recipes/      食谱系统
+├─ foh/          前厅忌口查询
+├─ receiving/    收货
+├─ dashboard/    后台概览
+├─ chatbot/      对话入口
+├─ knowledge/    知识相关页面
+└─ docs/         文档页
+```
+
+同仓库不等于同系统。
+
+真正的隔离依赖于：
+- 不同域名
+- 不同 PM2 进程
+- 不同数据库配置
+- 不同页面入口
+
+当前这几项已经做了隔离。
+
+---
+
+## 三、当前正式环境结构
+
+### 正式环境
+
+```text
+正式食谱系统
+├─ 域名: recipes.jify.com.cn
+├─ 应用: BangWagon VPS
+├─ 进程: PM2 / restaurant-daily-order
+└─ 数据库: BangWagon 本机 PostgreSQL / restaurant_prod
+```
+
+### 原有下单系统
+
+```text
+原有下单系统
+├─ 域名: order.jify.com.cn
+├─ 应用: BangWagon VPS
+└─ 进程: PM2 / ensue-order
+```
+
+### 当前运行时检查
 
 查看：
-- `GET /api/runtime/status`
+- [https://recipes.jify.com.cn/api/runtime/status](https://recipes.jify.com.cn/api/runtime/status)
 
-关键返回：
-- `recipe_store.mode = persistent`
-  - 可用于真实草稿、审批、发布
-- `recipe_store.mode = ephemeral`
-  - 只适合 UI 和解析预览
-- `postgres.configured = true`
-  - 说明已配置 Postgres 连接变量
-  - 当前仓库已补迁移骨架，但业务查询层仍在逐步从 SQLite 迁往 Postgres
+用于确认：
+- 当前是否为持久数据库
+- 当前数据库提供方
+- 当前数据目录/连接来源
 
-当前部署约束：
-- `Vercel + SQLite` 默认是临时库
-- `Render + persistent disk` 可以作为正式可运营环境
-- `Vercel + Postgres` 是下一阶段正式线上方案
-- 后续如果迁到 `Bangwagon / VPS`，建议继续复用同一套 Postgres，不再回退到 SQLite
+---
 
-## 多端口预留
-- 默认前后端同端口。
-- 可通过 `NEXT_PUBLIC_API_BASE_URL` 指向独立 API 服务（如 `http://localhost:3001`）。
-- 预留端口配置在 `lib/config.ts`。
+## 四、测试环境结构
 
-## Qwen API Key 配置（必须）
-1. 本地开发
-   - 复制模板：`cp .env.example .env.local`
-   - 在 `.env.local` 中填写真实 key（推荐字段：`DASHSCOPE_API_KEY`）
-2. Vercel 预览/线上
-   - 添加变量：`vercel env add DASHSCOPE_API_KEY`
-   - 重新部署：`vercel --yes`
+当前建议结构：
 
-支持任一变量名：`DASHSCOPE_API_KEY`、`DASHSCOPE_APIKEY`、`QWEN_API_KEY`。
+```text
+测试环境
+├─ 前端/预览: Vercel
+└─ 测试数据库: 外部 PostgreSQL（独立 test 库）
+```
 
-## MCP 聊天配置
-聊天页入口：
-- `http://localhost:3000/chatbot`
+原则：
+- **正式数据库不和测试数据库混用**
+- 正式环境写入 `restaurant_prod`
+- 测试环境必须连独立 test 数据库
 
-新增环境变量：
-- `MCP_SERVER_COMMAND`
-- `MCP_SERVER_ARGS`，推荐 JSON 数组字符串
-- `MCP_SERVER_CWD`
-- `MCP_PROTOCOL_VERSION`
-- `MCP_CHAT_TOOL`
-- `MCP_MULTI_AGENT_TOOL`
-- `CHAT_MODE`
+注意：
+- 当前 BangWagon 本机 PostgreSQL 主要承载正式库
+- 测试库不建议继续压在 1G VPS 上
 
-默认建议：
-- `CHAT_MODE=single`
-- `MCP_CHAT_TOOL=chat`
+---
 
-当前项目的 MCP 约定：
-- Next.js 服务端会通过 `stdio` 启动外部 MCP server
-- 聊天接口会调用配置好的 MCP tool
-- 传给 tool 的参数为 `query`、`conversationId`、`messages`、`mode`
-- tool 返回推荐格式：
-  - `structuredContent.answer`
-  - 可选 `structuredContent.conversationId`
-  - 可选 `structuredContent.agents`
-  - 或直接返回文本内容
+## 五、食谱系统的页面职责
 
-## 持久化部署
+当前食谱系统只保留 3 个主入口：
 
-推荐：
-- 使用 [render.yaml](/Users/jeff/Documents/New%20project/render.yaml) 部署到 Render
-- 数据目录挂载到 `/var/data`
+```text
+食谱系统
+├─ 录入工作台
+├─ 查看菜谱
+└─ 审批中心
+```
 
-如果走 `Vercel + Postgres`：
-- 先在 Vercel Marketplace 创建 Postgres
-- 配置 `POSTGRES_URL`（或兼容 `DATABASE_URL`）
-- 执行 `npm run postgres:migrate`
-- 再把业务存储层逐步切换到 Postgres
+### 1. 录入工作台
+入口：
+- [https://recipes.jify.com.cn/recipes](https://recipes.jify.com.cn/recipes)
 
-部署说明：
-- [RENDER_DEPLOY_PLAN.md](/Users/jeff/Documents/New%20project/RENDER_DEPLOY_PLAN.md)
-- [RENDER_GO_LIVE_CHECKLIST.md](/Users/jeff/Documents/New%20project/RENDER_GO_LIVE_CHECKLIST.md)
+职责：
+- AI 导入食谱
+- 修改子配方（Element）
+- 组装整道菜（Composite）
+- 提交审批
 
-## API
-- `POST /api/order`
-- `GET /api/order?date=YYYY-MM-DD`
-- `DELETE /api/order/:id`
-- `GET /api/stations`
-- `GET /api/suppliers`
+### 2. 查看菜谱
+入口：
+- [https://recipes.jify.com.cn/recipes/view](https://recipes.jify.com.cn/recipes/view)
 
-### 食谱系统 API（新增）
-- `GET /api/recipe-users`
-- `GET /api/recipes`
-- `POST /api/recipes`
-- `GET /api/recipes/:id`
-- `POST /api/recipes/:id/revision`
-- `PATCH /api/recipes/versions/:versionId`
-- `POST /api/recipes/versions/:versionId/submit`
-- `POST /api/recipes/versions/:versionId/review`
-- `POST /api/recipes/versions/:versionId/publish`
-- `GET /api/recipes/approvals`
+职责：
+- 厨房只读查看
+- 搜菜式 / 搜子配方
+- 看整道菜组成
+- 看出品动作
+- 点开子配方查看详细内容
 
-### bangwagong 对接（新增）
-发布食谱版本时会尝试 webhook 同步到 bangwagong。请在环境变量中配置：
-- `BANGWAGONG_WEBHOOK_URL`：你的 bangwagong webhook 地址
-- `BANGWAGONG_API_TOKEN`：可选，Bearer Token
-- `BANGWAGONG_WEBHOOK_TOKEN`：兼容别名，二选一即可
+### 3. 审批中心
+入口：
+- [https://recipes.jify.com.cn/recipes/approvals](https://recipes.jify.com.cn/recipes/approvals)
 
-前端入口：
-- `http://localhost:3000/recipes`
-- `http://localhost:3000/recipes/approvals`
+职责：
+- 查看待审批记录
+- 批量通过/驳回
+- 待发布列表
+- 发布正式版本
 
-食谱分类模型：
-- `BACKBONE`：基础母配方（跨菜单长期复用）
-- `MENU`：季度菜单食谱（创建时建议填写 `menu_cycle`，如 `2026Q2`）
+---
 
-食谱 JSON（V3-lite）：
-- `ELEMENT`：
-  - `meta`：`dish_code`、`dish_name`、`display_name`、`aliases`、`entity_kind`、`business_type`、`technique_family`、`menu_cycle`、`plating_image_url`
-  - `production`：`yield`、`net_yield_rate`、`key_temperature_points[]`
-  - `allergens` / `diet_flags`
-  - `ingredients[]`
-  - `steps[]`
-  - `component_refs[]`
-- `COMPOSITE`：
-  - `meta`
-  - `production.serves`
-  - `assembly_components[]`
-  - `assembly_steps[]`
+## 六、食谱数据模型（V3-lite）
 
-提交审批前会做结构校验。
+核心结构：
+
+```text
+recipes
+├─ ELEMENT     子配方/基础配方
+└─ COMPOSITE   整道菜
+```
+
+业务分类：
+- `BACKBONE`：基础母配方，长期复用
+- `MENU`：菜单菜/季度菜
+
+核心关系：
+- `COMPOSITE` 可以引用多个 `ELEMENT`
+- `ELEMENT` 也可以被其他 `ELEMENT` 引用
+- 审批和发布都基于 `recipe_versions`
+
 Schema 文件：
-- [schemas/element-record-v3-lite.schema.json](/Users/jeff/Documents/New%20project/schemas/element-record-v3-lite.schema.json)
-- [schemas/composite-record-v3-lite.schema.json](/Users/jeff/Documents/New%20project/schemas/composite-record-v3-lite.schema.json)
+- [element-record-v3-lite.schema.json](/Users/jeff/Documents/New%20project/schemas/element-record-v3-lite.schema.json)
+- [composite-record-v3-lite.schema.json](/Users/jeff/Documents/New%20project/schemas/composite-record-v3-lite.schema.json)
 
-## 数据库
+设计文档：
+- [RECIPE_V3_PLAN.md](/Users/jeff/Documents/New%20project/RECIPE_V3_PLAN.md)
+- [PROGRAM_MASTER_PLAN.md](/Users/jeff/Documents/New%20project/PROGRAM_MASTER_PLAN.md)
 
-默认：
-- 食谱系统：`data/app.db`
-- L0 引擎：`data/l0_engine.db`
+---
 
-可通过环境变量改写：
-- `DATA_DIR`
-- `RECIPES_DB_FILE`
-- `L0_DB_FILE`
+## 七、本地开发怎么跑
+
+### 环境要求
+- Node.js 20+
+- npm
+
+### 本地启动
+1. 安装依赖
+```bash
+npm install
+```
+
+2. 复制环境变量模板
+```bash
+cp .env.example .env.local
+```
+
+3. 运行部署自检
+```bash
+npm run deploy:check
+```
+
+4. 启动开发
+```bash
+npm run dev
+```
+
+5. 打开常用页面
+- [http://localhost:3000/order](http://localhost:3000/order)
+- [http://localhost:3000/recipes](http://localhost:3000/recipes)
+- [http://localhost:3000/recipes/view](http://localhost:3000/recipes/view)
+- [http://localhost:3000/recipes/approvals](http://localhost:3000/recipes/approvals)
+- [http://localhost:3000/foh](http://localhost:3000/foh)
+
+---
+
+## 八、本地数据存放位置
+
+如果本地没有配置 `DATA_DIR`，默认数据目录是：
+- [/Users/jeff/Documents/New project/data](/Users/jeff/Documents/New%20project/data)
+
+常见本地数据库文件：
+- [/Users/jeff/Documents/New project/data/app.db](/Users/jeff/Documents/New%20project/data/app.db)
+- [/Users/jeff/Documents/New project/data/l0_engine.db](/Users/jeff/Documents/New%20project/data/l0_engine.db)
+
+说明：
+- `app.db`：本地业务 SQLite
+- `l0_engine.db`：本地知识引擎 SQLite
+
+注意：
+- **正式环境已经不使用本地 `app.db`**
+- 正式食谱系统已切到 BangWagon 本机 PostgreSQL
+
+---
+
+## 九、环境变量重点
+
+### 食谱系统数据库
 - `RECIPES_DB_PROVIDER`
-- `POSTGRES_URL`
 - `DATABASE_URL`
+- `POSTGRES_URL`
+- `RECIPES_DB_FILE`
+- `DATA_DIR`
 
-## 食评采集与分类导出
-- 脚本：`scripts/food-review-collector.mjs`
-- 运行默认采集：`npm run collect:food-reviews`
-- 自定义参数示例：
-  - `node scripts/food-review-collector.mjs --pages 2 --max-per-query 12 --output output/food_reviews.md`
+### AI 导入
+- `DASHSCOPE_API_KEY`
+- 兼容：`DASHSCOPE_APIKEY`
+- 兼容：`QWEN_API_KEY`
 
-参数说明：
-- `--engine`：搜索引擎（当前默认 `google`，若超时会自动回退到 `bing`）
-- `--pages`：每个查询抓取的搜索结果页数（默认 `2`）
-- `--max-per-query`：每页最多解析条目数（默认 `10`）
-- `--output`：输出 Markdown 文件路径（默认 `output/food_reviews.md`）
-- `--delay-ms`：每次请求后的等待毫秒数（默认 `600`）
+### 发布同步（可选）
+- `BANGWAGONG_WEBHOOK_URL`
+- `BANGWAGONG_API_TOKEN`
+- `BANGWAGONG_WEBHOOK_TOKEN`
 
-## YouTube 高相关视频转文案
-- 脚本：`scripts/youtube_review_transcriber.py`
-- 运行示例：
-  - `npm run collect:youtube-transcripts -- --query "michelin fine dining review" --max-videos 6`
-  - `npm run collect:youtube-transcripts -- --query "michelin fine dining review" --keywords "michelin,fine dining,restaurant review,tasting menu" --strict-relevance --min-score 3 --max-videos 8`
-  - `python3 scripts/youtube_review_transcriber.py --query "亚洲 探店 食评" --keywords "探店,食评,餐厅,美食,vlog,review" --output output/youtube_food_transcripts.md`
-  - `python3 scripts/youtube_review_transcriber.py --query "占位查询" --video-url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --video-url "https://www.youtube.com/watch?v=jNQXAC9IVRw"`
-  - `python3 scripts/youtube_review_transcriber.py --query "占位查询" --playlist-url "https://www.youtube.com/watch?v=xxx&list=PLAYLIST_ID" --max-videos 200`
+---
 
-参数说明：
-- `--query`：YouTube 搜索词（必填）
-- `--keywords`：相关性关键词（逗号分隔，用于打分排序）
-- `--max-videos`：输出的视频数量上限（默认 `8`）
-- `--feed-limit`：参与打分的候选视频上限（默认 `30`）
-- `--min-score`：最低相关性分数（默认 `2`）
-- `--negative-keywords`：负向关键词（命中会降分，默认含 `trailer,music,reaction...`）
-- `--strict-relevance`：开启严格相关模式（至少命中 2 个正向关键词且不能命中强噪音）
-- `--prefer-lang`：字幕语言优先级（默认 `zh-Hans,zh,en`）
-- `--output`：输出 Markdown 路径（默认 `output/youtube_food_transcripts.md`）
-- `--video-url`：直接指定视频链接（可重复传多次，传入后会跳过搜索）
-- `--playlist-url`：直接指定播放列表链接（可重复传多次，自动展开整列表）
+## 十、当前推荐的协作方式
 
-## 项目情况书 / Handover / 待办追踪
-- 目录：`handover/`
-- 固定入口（给新 AI 的唯一链接）：`handover/LIVE_CONTEXT.md`
-- 每日创建交接文件：`npm run status:daily`
-- 记录事件与改动：
-  - `npm run status:event -- --what "今天发生了什么" --change "改了哪些内容"`
-- 新增待办：`npm run status:todo:add -- --task "需要做的事情"`
-- 标记完成：`npm run status:todo:done -- --id 1`
-- 会话开始：
-  - `npm run status:session:start -- --goal "本次目标" --plan "执行计划"`
-- 会话结束（自动生成 Markdown 报告 + 可直接更新待办）：
-  - `npm run status:session:end -- --summary "会话总结" --done "完成A|完成B" --pending "未完成A" --next "下一步A|下一步B" --done-id "1,2" --todo "新增待办A|新增待办B"`
-- 文档完整性检查：
-  - `npm run status:check`
-- 生成可分享链接（LIVE_CONTEXT）：
-  - `npm run status:link`
-- 提交并推送到 GitHub：
-  - `npm run status:push -- --message "chore(handover): daily update"`
+### 开发/测试
+- 在 Vercel 或本地先改和测
+- 使用独立测试数据库
+- 确认无误后再部署到 BangWagon 正式环境
 
-建议每个 AI 会话结束都执行一次 `status:session:end` 并 `status:push`，避免跨会话信息丢失。
+### 正式发布
+- `recipes.jify.com.cn` 只连正式数据库
+- 不在正式库里跑测试数据
+- 审批、发布在正式环境完成
+
+---
+
+## 十一、当前仓库的真实定位
+
+这个仓库不是“只有 recipes 的仓库”。
+
+它是一个餐厅业务总仓库，当前最重要的两条系统线是：
+- `order`：门店旧主系统
+- `recipes`：新食谱系统
+
+以后如果继续拆分，也建议按“系统边界”拆，不按页面拆。
+
+---
+
+## 十二、快速入口
+
+### 正式环境
+- 下单系统：[https://order.jify.com.cn](https://order.jify.com.cn)
+- 食谱录入：[https://recipes.jify.com.cn/recipes](https://recipes.jify.com.cn/recipes)
+- 食谱查看：[https://recipes.jify.com.cn/recipes/view](https://recipes.jify.com.cn/recipes/view)
+- 食谱审批：[https://recipes.jify.com.cn/recipes/approvals](https://recipes.jify.com.cn/recipes/approvals)
+- 运行状态：[https://recipes.jify.com.cn/api/runtime/status](https://recipes.jify.com.cn/api/runtime/status)
+
+### 本地开发
+- [http://localhost:3000/order](http://localhost:3000/order)
+- [http://localhost:3000/recipes](http://localhost:3000/recipes)
+- [http://localhost:3000/recipes/view](http://localhost:3000/recipes/view)
+- [http://localhost:3000/recipes/approvals](http://localhost:3000/recipes/approvals)
+
