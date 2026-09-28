@@ -145,10 +145,13 @@ async function main() {
     check(board.is_locked === true, "legacy /api/receiving/lock route re-locks via staff session");
 
     console.log("9. resolve discrepancies + late return after lock");
-    await api.post(`/api/discrepancies/${priceMismatch.id}/resolve`, { resolution: "RESOLVED_DEDUCTED" }, { expect: 403 });
+    await api.post(`/api/discrepancies/${priceMismatch.id}/resolve`, { resolution: "RESOLVED_DEDUCTED" }, { token: "", expect: 401 });
     const pm = (await api.post(`/api/discrepancies/${priceMismatch.id}/resolve`, { resolution: "RESOLVED_DEDUCTED", note: "供应商同意按30结" }, { token: chefToken })).data;
     check(pm.status === "RESOLVED_DEDUCTED" && near(pm.adjustment_amount, -24), "price mismatch deducted: adjustment -24");
-    await api.post(`/api/discrepancies/${short.id}/resolve`, { resolution: "RESOLVED_DEDUCTED" }, { token: chefToken });
+    const shortResolved = (await api.post(`/api/discrepancies/${short.id}/resolve`, { resolution: "RESOLVED_DEDUCTED" }, { token: receiverToken })).data;
+    check(shortResolved.status === "RESOLVED_DEDUCTED" && shortResolved.resolved_by === "收货阿明", "RECEIVER can resolve a discrepancy, resolved_by recorded", shortResolved);
+    await api.post("/api/discrepancies/settle", { ids: [short.id] }, { token: receiverToken, expect: 403 });
+    check(true, "RECEIVER cannot settle discrepancies (403)");
     const tomatoReceiving = (await api.get(`/api/receiving/compare?date=${D}&supplier_id=${supplier.id}`)).data.rows.find((r) => r.item_id === tomato.id).receiving;
     await api.post("/api/discrepancies", { type: "RETURN_LATER", receiving_item_id: tomatoReceiving.receiving_item_id, quantity: 9, reason: "坏" }, { expect: 400 });
     const ret = (await api.post("/api/discrepancies", {

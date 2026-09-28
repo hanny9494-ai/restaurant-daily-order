@@ -39,8 +39,8 @@
 ## 3. 角色与使用场景
 - 厨房下单人员：在 `/order` 录入并提交当天采购需求
 - 采购/管理人员：在 `/dashboard` 查看汇总、导出、复制供应商下单文本
-- 收货员（RECEIVER）：用自己的名字 + PIN 登录，在 `/receiving` 按供应商拍单对单、确认实收/拒收、登记事后退货
-- 厨师长（CHEF）：标记「已发送」、处理差异单、复核锁定当天收货、审核盘点、看对账与成本
+- 收货员（RECEIVER）：用自己的名字 + PIN 登录，在 `/receiving` 按供应商拍单对单、确认实收/拒收、登记事后退货、处理差异单（标记已补送/已退货/已扣款）
+- 厨师长（CHEF）：标记「已发送」、复核锁定当天收货、审核盘点、看对账与成本
 - 店长（MANAGER）：以上全部 + 员工管理 + 差异单结算 + 删除营业额
 - 管理员（ADMIN）：以上全部 + 参数设置（价差阈值、盘点日）
 - 管理员：在 `/dashboard/manage` 维护供应商、单位、PIN
@@ -155,7 +155,7 @@
 - 类型：`SHORT` 短缺/短斤、`REJECT_ON_SITE` 当场拒收、`RETURN_LATER` 事后退货（负数红冲）、`EXCHANGE` 换货（退+补）、`OVER_DELIVERY` 多送、`PRICE_MISMATCH` 单价差异（按报价入账、差价待确认）。
 - 状态：`OPEN → RESOLVED_RESENT / RESOLVED_RETURNED / RESOLVED_DEDUCTED → SETTLED`。
 - 自动生成：完成/暂存收货时按行重算（只替换仍为 OPEN 的自动差异单，已处理的保留）。
-- API：`GET/POST /api/discrepancies`、`POST /api/discrepancies/:id/resolve`（CHEF+）、`POST /api/discrepancies/settle`（MANAGER+）。
+- API：`GET/POST /api/discrepancies`、`POST /api/discrepancies/:id/resolve`（RECEIVER+）、`POST /api/discrepancies/settle`（MANAGER+）。
 
 ## 5.4.3 供应商对账 `/reconciliation`
 - 应付 = Σ(实收合格数量 × 单价) − 退货红冲 ± 调整。

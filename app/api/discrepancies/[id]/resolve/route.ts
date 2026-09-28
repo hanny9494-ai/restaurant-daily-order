@@ -9,7 +9,7 @@ import { resolveDiscrepancy } from "@/lib/ops/discrepancies";
 
 export async function POST(request: NextRequest, context: { params: { id: string } }) {
   return handle(async () => {
-    const actor = requireStaff(request, "CHEF");
+    const actor = requireStaff(request, "RECEIVER");
     const body = await readJson(request);
     return { data: resolveDiscrepancy(Number(context.params.id), body, actor) };
   });

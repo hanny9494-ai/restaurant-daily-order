@@ -21,7 +21,7 @@ function DiscrepancyView({ session }: { session: StaffSession }) {
   const [resolving, setResolving] = useState<any | null>(null);
   const [form, setForm] = useState({ resolution: "RESOLVED_DEDUCTED", note: "", adjustment: "" });
   const [error, setError] = useState("");
-  const canResolve = roleAtLeast(session.staff.role, "CHEF");
+  const canResolve = roleAtLeast(session.staff.role, "RECEIVER");
   const canSettle = roleAtLeast(session.staff.role, "MANAGER");
 
   async function load() {
