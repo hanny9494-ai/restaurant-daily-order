@@ -27,6 +27,17 @@ import type {
 const db = new Database(resolveDataFile(process.env.RECIPES_DB_FILE || "app.db"));
 
 db.pragma("journal_mode = WAL");
+db.pragma("busy_timeout = 5000");
+
+// Parallel processes (next build workers, several instances on one DATA_DIR) can race on
+// "check column then ALTER"; treat an already-added column as success.
+function safeAddColumn(sql: string) {
+  try {
+    db.exec(sql);
+  } catch (error: any) {
+    if (!String(error?.message || "").includes("duplicate column name")) throw error;
+  }
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS stations (
@@ -257,39 +268,39 @@ CREATE INDEX IF NOT EXISTS idx_receiving_scan_files_date ON receiving_scan_files
 
 const dailyListsColumns = db.prepare("PRAGMA table_info(daily_lists)").all() as Array<{ name: string }>;
 if (!dailyListsColumns.some((col) => col.name === "receiving_locked_at")) {
-  db.exec("ALTER TABLE daily_lists ADD COLUMN receiving_locked_at TEXT");
+  safeAddColumn("ALTER TABLE daily_lists ADD COLUMN receiving_locked_at TEXT");
 }
 const receivingItemColumns = db.prepare("PRAGMA table_info(receiving_items)").all() as Array<{ name: string }>;
 if (!receivingItemColumns.some((col) => col.name === "input_unit_price")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN input_unit_price REAL");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN input_unit_price REAL");
 }
 if (!receivingItemColumns.some((col) => col.name === "price_unit")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN price_unit TEXT");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN price_unit TEXT");
 }
 if (!receivingItemColumns.some((col) => col.name === "scan_file_id")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN scan_file_id INTEGER");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN scan_file_id INTEGER");
 }
 if (!receivingItemColumns.some((col) => col.name === "is_auto_recognized")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN is_auto_recognized INTEGER NOT NULL DEFAULT 0");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN is_auto_recognized INTEGER NOT NULL DEFAULT 0");
 }
 const recipeColumns = db.prepare("PRAGMA table_info(recipes)").all() as Array<{ name: string }>;
 if (!recipeColumns.some((col) => col.name === "recipe_type")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN recipe_type TEXT NOT NULL DEFAULT 'BACKBONE'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN recipe_type TEXT NOT NULL DEFAULT 'BACKBONE'");
 }
 if (!recipeColumns.some((col) => col.name === "entity_kind")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'ELEMENT'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'ELEMENT'");
 }
 if (!recipeColumns.some((col) => col.name === "business_type")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN business_type TEXT NOT NULL DEFAULT 'BACKBONE'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN business_type TEXT NOT NULL DEFAULT 'BACKBONE'");
 }
 if (!recipeColumns.some((col) => col.name === "technique_family")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN technique_family TEXT");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN technique_family TEXT");
 }
 if (!recipeColumns.some((col) => col.name === "menu_cycle")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN menu_cycle TEXT");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN menu_cycle TEXT");
 }
 if (!recipeColumns.some((col) => col.name === "import_source")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN import_source TEXT NOT NULL DEFAULT 'manual'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN import_source TEXT NOT NULL DEFAULT 'manual'");
 }
 db.exec("UPDATE recipes SET recipe_type = 'BACKBONE' WHERE recipe_type IS NULL OR TRIM(recipe_type) = ''");
 db.exec("UPDATE recipes SET entity_kind = 'ELEMENT' WHERE entity_kind IS NULL OR TRIM(entity_kind) = ''");
@@ -305,32 +316,35 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_recipes_type_cycle ON recipes(recipe_typ
 db.exec("CREATE INDEX IF NOT EXISTS idx_recipes_entity_business ON recipes(entity_kind, business_type, technique_family)");
 const recipeVersionColumns = db.prepare("PRAGMA table_info(recipe_versions)").all() as Array<{ name: string }>;
 if (!recipeVersionColumns.some((col) => col.name === "record_json")) {
-  db.exec("ALTER TABLE recipe_versions ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'");
+  safeAddColumn("ALTER TABLE recipe_versions ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'");
 }
 
-const recipeUsersSqlRow = db
-  .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='recipe_users'")
-  .get() as { sql?: string } | undefined;
-if (recipeUsersSqlRow?.sql && !recipeUsersSqlRow.sql.includes("'FOH'")) {
-  db.exec(`
-    CREATE TABLE recipe_users_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      role TEXT NOT NULL CHECK (role IN ('OWNER', 'EDITOR', 'REVIEWER', 'VIEWER', 'FOH', 'RECEIVER')),
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+// Re-checked inside an IMMEDIATE transaction so concurrent processes cannot both rebuild the table.
+db.transaction(() => {
+  const recipeUsersSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='recipe_users'")
+    .get() as { sql?: string } | undefined;
+  if (recipeUsersSqlRow?.sql && !recipeUsersSqlRow.sql.includes("'FOH'")) {
+    db.exec(`
+      CREATE TABLE recipe_users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('OWNER', 'EDITOR', 'REVIEWER', 'VIEWER', 'FOH', 'RECEIVER')),
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
-    INSERT INTO recipe_users_new(id, name, email, role, is_active, created_at)
-    SELECT id, name, email, role, is_active, created_at
-    FROM recipe_users;
+      INSERT INTO recipe_users_new(id, name, email, role, is_active, created_at)
+      SELECT id, name, email, role, is_active, created_at
+      FROM recipe_users;
 
-    DROP TABLE recipe_users;
-    ALTER TABLE recipe_users_new RENAME TO recipe_users;
-    CREATE INDEX IF NOT EXISTS idx_recipe_users_email ON recipe_users(email);
-  `);
-}
+      DROP TABLE recipe_users;
+      ALTER TABLE recipe_users_new RENAME TO recipe_users;
+      CREATE INDEX IF NOT EXISTS idx_recipe_users_email ON recipe_users(email);
+    `);
+  }
+}).immediate();
 
 migrateOpsSchema(db);
 

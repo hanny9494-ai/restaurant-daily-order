@@ -8,7 +8,17 @@ import type { OrderItem, Station, Supplier, UnitOption } from "@/lib/types";
 const ORDER_DRAFT_KEY = "ensue_order_draft_v2";
 const ORDER_STAGED_KEY = "ensue_order_staged_v1";
 
+type CatalogItem = {
+  id: number;
+  name: string;
+  aliases: string[];
+  base_unit: string;
+  default_supplier_id: number | null;
+  units: Array<{ unit: string; factor_to_base: number }>;
+};
+
 type DraftItem = {
+  itemId?: number | null;
   itemName: string;
   quantity: string;
   unit: string;
@@ -23,10 +33,17 @@ type StagedLine = {
   supplier_id: number;
   supplier_name: string;
   item_name: string;
+  item_id?: number | null;
   quantity: string;
   unit: string;
   note: string;
 };
+
+function findCatalogItem(catalog: CatalogItem[], name: string) {
+  const key = name.trim().toLowerCase().replace(/\s+/g, "");
+  if (!key) return null;
+  return catalog.find((c) => [c.name, ...c.aliases].some((n) => n.trim().toLowerCase().replace(/\s+/g, "") === key)) || null;
+}
 
 function createEmptyItem(): DraftItem {
   return {
@@ -52,6 +69,7 @@ export default function OrderPage() {
   const [stations, setStations] = useState<Station[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [units, setUnits] = useState<UnitOption[]>([]);
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [orders, setOrders] = useState<OrderItem[]>([]);
 
   const [stationId, setStationId] = useState<number | "">("");
@@ -67,6 +85,10 @@ export default function OrderPage() {
       fetch(`${apiBase}/api/suppliers`),
       fetch(`${apiBase}/api/units`)
     ]);
+    fetch(`${apiBase}/api/items`)
+      .then((r) => r.json())
+      .then((j) => setCatalog(j.data || []))
+      .catch(() => setCatalog([]));
 
     const stationsJson = await stationsRes.json();
     const suppliersJson = await suppliersRes.json();
@@ -166,6 +188,22 @@ export default function OrderPage() {
     setItems((prev) => prev.map((it, i) => (i === index ? { ...it, ...patch } : it)));
   }
 
+  // Item master first: picking/typing a known name (or alias) links item_id and defaults the unit.
+  function setItemName(index: number, name: string) {
+    const matched = findCatalogItem(catalog, name);
+    setItems((prev) => prev.map((it, i) => {
+      if (i !== index) return it;
+      const next: DraftItem = { ...it, itemName: name, itemId: matched?.id ?? null };
+      if (matched && (!it.itemId || it.itemId !== matched.id)) next.unit = matched.base_unit;
+      return next;
+    }));
+  }
+
+  const supplierCatalog = useMemo(
+    () => catalog.filter((c) => supplierId && c.default_supplier_id === supplierId).slice(0, 16),
+    [catalog, supplierId]
+  );
+
   function removeItemRow(index: number) {
     setItems((prev) => {
       if (prev.length === 1) return prev;
@@ -191,6 +229,7 @@ export default function OrderPage() {
 
     const payloadItems = items
       .map((it) => ({
+        item_id: it.itemId ?? null,
         item_name: it.itemName.trim(),
         quantity: it.quantity.trim(),
         unit: it.unit.trim(),
@@ -226,6 +265,7 @@ export default function OrderPage() {
       supplier_id: payload.finalSupplierId,
       supplier_name: payload.supplierName,
       item_name: it.item_name,
+      item_id: it.item_id,
       quantity: it.quantity,
       unit: it.unit,
       note: it.note
@@ -269,6 +309,7 @@ export default function OrderPage() {
             station_id: it.station_id,
             supplier_id: it.supplier_id,
             item_name: it.item_name,
+            item_id: it.item_id ?? null,
             quantity: it.quantity,
             unit: it.unit,
             note: it.note
@@ -349,6 +390,9 @@ export default function OrderPage() {
             </div>
           </div>
 
+          <datalist id="order-item-catalog">
+            {catalog.map((c) => <option key={c.id} value={c.name} />)}
+          </datalist>
           <div style={{ marginTop: 12 }}>
             <h3 style={{ marginBottom: 8 }}>填写条目（先暂存）</h3>
             {items.map((item, idx) => (
@@ -363,9 +407,20 @@ export default function OrderPage() {
                     <label>ITEM 名称</label>
                     <input
                       value={item.itemName}
-                      onChange={(e) => updateItem(idx, { itemName: e.target.value })}
-                      placeholder="如 小白菜"
+                      list="order-item-catalog"
+                      onChange={(e) => setItemName(idx, e.target.value)}
+                      placeholder="从品项主档选择，如 小白菜"
                     />
+                    {supplierCatalog.length > 0 && !item.itemName && (
+                      <div className="row" style={{ marginTop: 6 }}>
+                        {supplierCatalog.map((c) => (
+                          <button key={c.id} type="button" className="unit-btn" onClick={() => setItemName(idx, c.name)}>{c.name}</button>
+                        ))}
+                      </div>
+                    )}
+                    {item.itemName.trim() && !item.itemId && catalog.length > 0 && (
+                      <span className="muted" style={{ fontSize: 12 }}>不在品项主档：将作为临时品项提交，并进入「待归并」列表</span>
+                    )}
                   </div>
 
                   <div className="field">
@@ -380,6 +435,13 @@ export default function OrderPage() {
                   <div className="field">
                     <label>单位</label>
                     <div className="row">
+                      {(() => {
+                        const linked = item.itemId ? catalog.find((c) => c.id === item.itemId) : null;
+                        const extra = linked ? [linked.base_unit, ...linked.units.map((u) => u.unit)].filter((u) => !units.some((x) => x.name === u)) : [];
+                        return extra.map((u) => (
+                          <button key={`x-${u}`} type="button" className={`unit-btn ${item.unit === u ? "active" : ""}`} onClick={() => updateItem(idx, { unit: u })}>{u}</button>
+                        ));
+                      })()}
                       {units.map((u) => (
                         <button
                           key={u.id}

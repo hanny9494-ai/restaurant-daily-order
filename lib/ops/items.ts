@@ -1,6 +1,6 @@
 import { db, OpsError, audit, normalizeName, num, round4 } from "@/lib/ops/common";
 import type { Actor } from "@/lib/ops/common";
-import { weightFactor } from "@/lib/unit-convert";
+import { factorToBase } from "@/lib/ops/unit-math";
 
 export const ITEM_CATEGORIES = ["肉", "海鲜", "蔬菜", "水果", "干货", "调料", "乳制品", "蛋", "酒水", "饮料", "包材", "其他"];
 export const STORAGE_LOCATIONS = ["冷藏", "冷冻", "干仓", "酒水", "吧台", "其他"];
@@ -328,40 +328,7 @@ export function mergeItems(sourceId: number, targetId: number, actor: Actor) {
 
 // ---------- unit conversion (item aware) ----------
 
-/** How many base units one `unit` of this item equals; null if unknown. */
-export function factorToBase(item: Pick<Item, "base_unit" | "units"> | null, unit: string): number | null {
-  const u = String(unit || "").trim();
-  if (!item) return null;
-  if (!u) return null;
-  if (u === item.base_unit) return 1;
-  const custom = item.units.find((x) => x.unit === u);
-  if (custom) return custom.factor_to_base;
-  const fu = weightFactor(u);
-  const fb = weightFactor(item.base_unit);
-  if (fu !== null && fb !== null) return fu / fb;
-  return null;
-}
-
-/** Convert quantity between units: via item conversions, else plain weight conversion. */
-export function convertQuantity(item: Pick<Item, "base_unit" | "units"> | null, qty: number, fromUnit: string, toUnit: string): number | null {
-  if (String(fromUnit).trim() === String(toUnit).trim()) return qty;
-  if (item) {
-    const f = factorToBase(item, fromUnit);
-    const t = factorToBase(item, toUnit);
-    if (f !== null && t !== null && t !== 0) return (qty * f) / t;
-  }
-  const wf = weightFactor(fromUnit);
-  const wt = weightFactor(toUnit);
-  if (wf !== null && wt !== null) return (qty * wf) / wt;
-  return null;
-}
-
-/** Convert a price quoted per `priceUnit` into price per `targetUnit`. */
-export function convertPrice(item: Pick<Item, "base_unit" | "units"> | null, price: number, priceUnit: string, targetUnit: string): number | null {
-  // price per target = price per priceUnit * (priceUnits in one target unit)
-  const perTarget = convertQuantity(item, 1, targetUnit, priceUnit);
-  return perTarget === null ? null : price * perTarget;
-}
+export { factorToBase, convertQuantity, convertPrice } from "@/lib/ops/unit-math";
 
 // ---------- price history ----------
 

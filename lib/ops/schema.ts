@@ -10,7 +10,12 @@ function addColumns(db: Db, table: string, defs: Record<string, string>) {
   const existing = columnNames(db, table);
   for (const [name, def] of Object.entries(defs)) {
     if (!existing.has(name)) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+      try {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+      } catch (error: any) {
+        // parallel processes (next build workers, multiple instances) may race on the same migration
+        if (!String(error?.message || "").includes("duplicate column name")) throw error;
+      }
     }
   }
 }

@@ -1,6 +1,7 @@
 import type { OrderItem, Supplier } from "@/lib/types";
 
-const RESTAURANT_NAME = "ensue";
+// Per-store deployments set NEXT_PUBLIC_STORE_NAME (baked in at build time).
+const RESTAURANT_NAME = process.env.NEXT_PUBLIC_STORE_NAME || "ensue";
 
 type MergedItem = {
   supplier_id: number;
