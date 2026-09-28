@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { convertUnitPrice, normalizeUnitAlias } from "@/lib/unit-convert";
 import { resolveDataFile } from "@/lib/data-paths";
+import { migrateOpsSchema } from "@/lib/ops/schema";
 import type {
   CreateOrderPayload,
   DailyListItem,
@@ -26,6 +27,17 @@ import type {
 const db = new Database(resolveDataFile(process.env.RECIPES_DB_FILE || "app.db"));
 
 db.pragma("journal_mode = WAL");
+db.pragma("busy_timeout = 5000");
+
+// Parallel processes (next build workers, several instances on one DATA_DIR) can race on
+// "check column then ALTER"; treat an already-added column as success.
+function safeAddColumn(sql: string) {
+  try {
+    db.exec(sql);
+  } catch (error: any) {
+    if (!String(error?.message || "").includes("duplicate column name")) throw error;
+  }
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS stations (
@@ -256,39 +268,39 @@ CREATE INDEX IF NOT EXISTS idx_receiving_scan_files_date ON receiving_scan_files
 
 const dailyListsColumns = db.prepare("PRAGMA table_info(daily_lists)").all() as Array<{ name: string }>;
 if (!dailyListsColumns.some((col) => col.name === "receiving_locked_at")) {
-  db.exec("ALTER TABLE daily_lists ADD COLUMN receiving_locked_at TEXT");
+  safeAddColumn("ALTER TABLE daily_lists ADD COLUMN receiving_locked_at TEXT");
 }
 const receivingItemColumns = db.prepare("PRAGMA table_info(receiving_items)").all() as Array<{ name: string }>;
 if (!receivingItemColumns.some((col) => col.name === "input_unit_price")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN input_unit_price REAL");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN input_unit_price REAL");
 }
 if (!receivingItemColumns.some((col) => col.name === "price_unit")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN price_unit TEXT");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN price_unit TEXT");
 }
 if (!receivingItemColumns.some((col) => col.name === "scan_file_id")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN scan_file_id INTEGER");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN scan_file_id INTEGER");
 }
 if (!receivingItemColumns.some((col) => col.name === "is_auto_recognized")) {
-  db.exec("ALTER TABLE receiving_items ADD COLUMN is_auto_recognized INTEGER NOT NULL DEFAULT 0");
+  safeAddColumn("ALTER TABLE receiving_items ADD COLUMN is_auto_recognized INTEGER NOT NULL DEFAULT 0");
 }
 const recipeColumns = db.prepare("PRAGMA table_info(recipes)").all() as Array<{ name: string }>;
 if (!recipeColumns.some((col) => col.name === "recipe_type")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN recipe_type TEXT NOT NULL DEFAULT 'BACKBONE'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN recipe_type TEXT NOT NULL DEFAULT 'BACKBONE'");
 }
 if (!recipeColumns.some((col) => col.name === "entity_kind")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'ELEMENT'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'ELEMENT'");
 }
 if (!recipeColumns.some((col) => col.name === "business_type")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN business_type TEXT NOT NULL DEFAULT 'BACKBONE'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN business_type TEXT NOT NULL DEFAULT 'BACKBONE'");
 }
 if (!recipeColumns.some((col) => col.name === "technique_family")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN technique_family TEXT");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN technique_family TEXT");
 }
 if (!recipeColumns.some((col) => col.name === "menu_cycle")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN menu_cycle TEXT");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN menu_cycle TEXT");
 }
 if (!recipeColumns.some((col) => col.name === "import_source")) {
-  db.exec("ALTER TABLE recipes ADD COLUMN import_source TEXT NOT NULL DEFAULT 'manual'");
+  safeAddColumn("ALTER TABLE recipes ADD COLUMN import_source TEXT NOT NULL DEFAULT 'manual'");
 }
 db.exec("UPDATE recipes SET recipe_type = 'BACKBONE' WHERE recipe_type IS NULL OR TRIM(recipe_type) = ''");
 db.exec("UPDATE recipes SET entity_kind = 'ELEMENT' WHERE entity_kind IS NULL OR TRIM(entity_kind) = ''");
@@ -304,32 +316,43 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_recipes_type_cycle ON recipes(recipe_typ
 db.exec("CREATE INDEX IF NOT EXISTS idx_recipes_entity_business ON recipes(entity_kind, business_type, technique_family)");
 const recipeVersionColumns = db.prepare("PRAGMA table_info(recipe_versions)").all() as Array<{ name: string }>;
 if (!recipeVersionColumns.some((col) => col.name === "record_json")) {
-  db.exec("ALTER TABLE recipe_versions ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'");
+  safeAddColumn("ALTER TABLE recipe_versions ADD COLUMN record_json TEXT NOT NULL DEFAULT '{}'");
 }
 
-const recipeUsersSqlRow = db
-  .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='recipe_users'")
-  .get() as { sql?: string } | undefined;
-if (recipeUsersSqlRow?.sql && !recipeUsersSqlRow.sql.includes("'FOH'")) {
-  db.exec(`
-    CREATE TABLE recipe_users_new (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      role TEXT NOT NULL CHECK (role IN ('OWNER', 'EDITOR', 'REVIEWER', 'VIEWER', 'FOH', 'RECEIVER')),
-      is_active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+// Re-checked inside an IMMEDIATE transaction so concurrent processes cannot both rebuild the table.
+db.transaction(() => {
+  const recipeUsersSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='recipe_users'")
+    .get() as { sql?: string } | undefined;
+  if (recipeUsersSqlRow?.sql && !recipeUsersSqlRow.sql.includes("'FOH'")) {
+    db.exec(`
+      CREATE TABLE recipe_users_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('OWNER', 'EDITOR', 'REVIEWER', 'VIEWER', 'FOH', 'RECEIVER')),
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
-    INSERT INTO recipe_users_new(id, name, email, role, is_active, created_at)
-    SELECT id, name, email, role, is_active, created_at
-    FROM recipe_users;
+      INSERT INTO recipe_users_new(id, name, email, role, is_active, created_at)
+      SELECT id, name, email, role, is_active, created_at
+      FROM recipe_users;
 
-    DROP TABLE recipe_users;
-    ALTER TABLE recipe_users_new RENAME TO recipe_users;
-    CREATE INDEX IF NOT EXISTS idx_recipe_users_email ON recipe_users(email);
-  `);
-}
+      DROP TABLE recipe_users;
+      ALTER TABLE recipe_users_new RENAME TO recipe_users;
+      CREATE INDEX IF NOT EXISTS idx_recipe_users_email ON recipe_users(email);
+    `);
+  }
+}).immediate();
+
+migrateOpsSchema(db);
+
+/** Shared connection for lib/ops/* modules (receiving loop, stocktake, cost). */
+export const sqlite = db;
+
+// New store deployments can set SEED_DEFAULT_SUPPLIERS=0 to start with an empty supplier list.
+const shouldSeedDefaultSuppliers = String(process.env.SEED_DEFAULT_SUPPLIERS ?? "1").trim() !== "0";
 
 const defaultStations = ["Hot", "Cold", "Prep", "Pastry", "Fish", "GM"];
 
@@ -363,7 +386,9 @@ const syncSuppliers = db.transaction(() => {
   }
 });
 
-syncSuppliers();
+if (shouldSeedDefaultSuppliers) {
+  syncSuppliers();
+}
 
 const defaultUnits = ["克", "千克", "条", "个", "箱"];
 
@@ -484,8 +509,8 @@ export function softDeleteUnit(id: number) {
 export function createOrderItem(payload: CreateOrderPayload) {
   const stmt = db.prepare(`
     INSERT INTO order_items (
-      date, station_id, supplier_id, item_name, quantity, unit, note, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted')
+      date, station_id, supplier_id, item_name, quantity, unit, note, status, item_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?)
   `);
 
   const result = stmt.run(
@@ -495,7 +520,8 @@ export function createOrderItem(payload: CreateOrderPayload) {
     payload.item_name.trim(),
     payload.quantity.trim(),
     payload.unit.trim(),
-    payload.note?.trim() || null
+    payload.note?.trim() || null,
+    payload.item_id ?? null
   );
 
   return result.lastInsertRowid;
@@ -504,8 +530,8 @@ export function createOrderItem(payload: CreateOrderPayload) {
 export function createOrderItemsBulk(payloads: CreateOrderPayload[]) {
   const stmt = db.prepare(`
     INSERT INTO order_items (
-      date, station_id, supplier_id, item_name, quantity, unit, note, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted')
+      date, station_id, supplier_id, item_name, quantity, unit, note, status, item_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?)
   `);
 
   const insertMany = db.transaction((rows: CreateOrderPayload[]) => {
@@ -518,7 +544,8 @@ export function createOrderItemsBulk(payloads: CreateOrderPayload[]) {
         row.item_name.trim(),
         row.quantity.trim(),
         row.unit.trim(),
-        row.note?.trim() || null
+        row.note?.trim() || null,
+        row.item_id ?? null
       );
       ids.push(Number(result.lastInsertRowid));
     }
@@ -538,6 +565,7 @@ export function getOrderItemsByDate(date: string): OrderItem[] {
       oi.supplier_id,
       sp.name AS supplier_name,
       oi.item_name,
+      oi.item_id,
       oi.quantity,
       oi.unit,
       oi.note,
@@ -563,6 +591,7 @@ export function getOrderItemsByDateRange(startDate: string, endDate: string): Or
       oi.supplier_id,
       sp.name AS supplier_name,
       oi.item_name,
+      oi.item_id,
       oi.quantity,
       oi.unit,
       oi.note,
@@ -587,12 +616,12 @@ export function generateDailyListSnapshot(date: string) {
   const insertList = db.prepare("INSERT INTO daily_lists(date) VALUES (?)");
   const insertItem = db.prepare(`
     INSERT INTO daily_list_items (
-      daily_list_id, supplier_id, item_name, unit, total_quantity, source_count
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      daily_list_id, supplier_id, item_name, unit, total_quantity, source_count, item_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const updateItem = db.prepare(`
     UPDATE daily_list_items
-    SET total_quantity = ?, source_count = ?
+    SET total_quantity = ?, source_count = ?, item_id = COALESCE(?, item_id)
     WHERE id = ?
   `);
   const getList = db.prepare("SELECT id, receiving_locked_at FROM daily_lists WHERE date = ? LIMIT 1");
@@ -622,6 +651,7 @@ export function generateDailyListSnapshot(date: string) {
       unit: string;
       total: number;
       source_count: number;
+      item_id: number | null;
     }>();
 
     for (const order of orders) {
@@ -630,13 +660,15 @@ export function generateDailyListSnapshot(date: string) {
       if (existing) {
         existing.total += toNumber(order.quantity);
         existing.source_count += 1;
+        if (!existing.item_id && order.item_id) existing.item_id = order.item_id;
       } else {
         merged.set(key, {
           supplier_id: order.supplier_id,
           item_name: order.item_name,
           unit: order.unit,
           total: toNumber(order.quantity),
-          source_count: 1
+          source_count: 1,
+          item_id: order.item_id ?? null
         });
       }
     }
@@ -657,7 +689,7 @@ export function generateDailyListSnapshot(date: string) {
       const key = `${row.supplier_id}::${row.item_name}::${row.unit}`;
       const existingId = existingMap.get(key);
       if (existingId) {
-        updateItem.run(String(row.total), row.source_count, existingId);
+        updateItem.run(String(row.total), row.source_count, row.item_id, existingId);
       } else {
         insertItem.run(
           list.id,
@@ -665,7 +697,8 @@ export function generateDailyListSnapshot(date: string) {
           row.item_name,
           row.unit,
           String(row.total),
-          row.source_count
+          row.source_count,
+          row.item_id
         );
       }
     }
@@ -734,6 +767,13 @@ export function getDailyListItemsByDate(date: string): DailyListItem[] {
       dli.unit,
       dli.total_quantity,
       dli.source_count,
+      dli.item_id,
+      dli.is_extra,
+      ri.id AS receiving_item_id,
+      ri.received_quantity,
+      ri.rejected_quantity,
+      ri.reject_reason,
+      ri.received_by,
       ri.quality_ok,
       ri.unit_price,
       ri.input_unit_price,

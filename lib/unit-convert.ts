@@ -18,6 +18,12 @@ export function normalizeUnitAlias(unit: string) {
   return unit.trim();
 }
 
+/** Grams per unit for weight units (克/千克/公斤/斤/g/kg), or null for non-weight units. */
+export function weightFactor(unit: string) {
+  const f = WEIGHT_UNIT_FACTORS[normalizeRawUnit(unit)];
+  return Number.isFinite(f) ? f : null;
+}
+
 export function isWeightUnit(unit: string) {
   const raw = normalizeRawUnit(unit);
   return Number.isFinite(WEIGHT_UNIT_FACTORS[raw]);

@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { getApiBaseUrl } from "@/lib/config";
 import type { Supplier, UnitOption } from "@/lib/types";
+import StaffAdminSection from "@/components/ops/StaffAdminSection";
 
 const DASHBOARD_PIN_KEY = "dashboard_pin";
 
@@ -202,6 +203,8 @@ export default function DashboardManagePage() {
         <h1>/dashboard/manage 管理设置</h1>
         <button className="btn secondary" type="button" onClick={() => router.push("/dashboard")}>返回汇总端</button>
       </div>
+
+      <StaffAdminSection />
 
       <section className="card">
         <h2>PIN 设置</h2>

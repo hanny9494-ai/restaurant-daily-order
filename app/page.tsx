@@ -53,6 +53,25 @@ export default function HomePage() {
           </div>
         </section>
 
+        <section style={{ marginBottom: 16 }}>
+          <h2 style={{ marginBottom: 10 }}>收货与库存</h2>
+          <div className="ui24-grid-2">
+            {[
+              { href: "/receiving", title: "收货看板", desc: "按供应商拍单对单、差异、复核锁定" },
+              { href: "/discrepancies", title: "差异单", desc: "短斤 / 拒收 / 退货 / 价差处理" },
+              { href: "/stocktake", title: "每周盘点", desc: "按储位手机盘点，审核后锁定" },
+              { href: "/cost", title: "食材成本", desc: "期初 + 采购 − 期末，成本率趋势" },
+              { href: "/reconciliation", title: "供应商对账", desc: "应付明细与 Excel 导出" },
+              { href: "/items", title: "品项主档", desc: "别名、单位换算、进价历史" }
+            ].map((x) => (
+              <Link key={x.href} href={x.href} className="ui24-card ui24-card-press" style={{ textDecoration: "none", color: "inherit" }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>{x.title}</div>
+                <div className="ui24-muted">{x.desc}</div>
+              </Link>
+            ))}
+          </div>
+        </section>
+
         <section className="ui24-card">
           <h2 style={{ marginBottom: 10 }}>系统入口</h2>
           <div className="row">
