@@ -26,6 +26,13 @@ export type DailyListItem = {
   unit: string;
   total_quantity: string;
   source_count: number;
+  item_id?: number | null;
+  is_extra?: number;
+  receiving_item_id?: number | null;
+  received_quantity?: number | null;
+  rejected_quantity?: number | null;
+  reject_reason?: string | null;
+  received_by?: string | null;
   quality_ok: number | null;
   unit_price: number | null;
   input_unit_price: number | null;
@@ -49,6 +56,7 @@ export type OrderItem = {
   supplier_id: number;
   supplier_name: string;
   item_name: string;
+  item_id?: number | null;
   quantity: string;
   unit: string;
   note: string | null;
@@ -64,6 +72,7 @@ export type CreateOrderPayload = {
   quantity: string;
   unit: string;
   note?: string;
+  item_id?: number | null;
 };
 
 export type RecipeUserRole = "OWNER" | "EDITOR" | "REVIEWER" | "VIEWER" | "FOH" | "RECEIVER";

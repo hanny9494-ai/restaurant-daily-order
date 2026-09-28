@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { convertUnitPrice, normalizeUnitAlias } from "@/lib/unit-convert";
 import { resolveDataFile } from "@/lib/data-paths";
+import { migrateOpsSchema } from "@/lib/ops/schema";
 import type {
   CreateOrderPayload,
   DailyListItem,
@@ -331,6 +332,14 @@ if (recipeUsersSqlRow?.sql && !recipeUsersSqlRow.sql.includes("'FOH'")) {
   `);
 }
 
+migrateOpsSchema(db);
+
+/** Shared connection for lib/ops/* modules (receiving loop, stocktake, cost). */
+export const sqlite = db;
+
+// New store deployments can set SEED_DEFAULT_SUPPLIERS=0 to start with an empty supplier list.
+const shouldSeedDefaultSuppliers = String(process.env.SEED_DEFAULT_SUPPLIERS ?? "1").trim() !== "0";
+
 const defaultStations = ["Hot", "Cold", "Prep", "Pastry", "Fish", "GM"];
 
 const syncStations = db.transaction(() => {
@@ -363,7 +372,9 @@ const syncSuppliers = db.transaction(() => {
   }
 });
 
-syncSuppliers();
+if (shouldSeedDefaultSuppliers) {
+  syncSuppliers();
+}
 
 const defaultUnits = ["克", "千克", "条", "个", "箱"];
 
@@ -484,8 +495,8 @@ export function softDeleteUnit(id: number) {
 export function createOrderItem(payload: CreateOrderPayload) {
   const stmt = db.prepare(`
     INSERT INTO order_items (
-      date, station_id, supplier_id, item_name, quantity, unit, note, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted')
+      date, station_id, supplier_id, item_name, quantity, unit, note, status, item_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?)
   `);
 
   const result = stmt.run(
@@ -495,7 +506,8 @@ export function createOrderItem(payload: CreateOrderPayload) {
     payload.item_name.trim(),
     payload.quantity.trim(),
     payload.unit.trim(),
-    payload.note?.trim() || null
+    payload.note?.trim() || null,
+    payload.item_id ?? null
   );
 
   return result.lastInsertRowid;
@@ -504,8 +516,8 @@ export function createOrderItem(payload: CreateOrderPayload) {
 export function createOrderItemsBulk(payloads: CreateOrderPayload[]) {
   const stmt = db.prepare(`
     INSERT INTO order_items (
-      date, station_id, supplier_id, item_name, quantity, unit, note, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted')
+      date, station_id, supplier_id, item_name, quantity, unit, note, status, item_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?)
   `);
 
   const insertMany = db.transaction((rows: CreateOrderPayload[]) => {
@@ -518,7 +530,8 @@ export function createOrderItemsBulk(payloads: CreateOrderPayload[]) {
         row.item_name.trim(),
         row.quantity.trim(),
         row.unit.trim(),
-        row.note?.trim() || null
+        row.note?.trim() || null,
+        row.item_id ?? null
       );
       ids.push(Number(result.lastInsertRowid));
     }
@@ -538,6 +551,7 @@ export function getOrderItemsByDate(date: string): OrderItem[] {
       oi.supplier_id,
       sp.name AS supplier_name,
       oi.item_name,
+      oi.item_id,
       oi.quantity,
       oi.unit,
       oi.note,
@@ -563,6 +577,7 @@ export function getOrderItemsByDateRange(startDate: string, endDate: string): Or
       oi.supplier_id,
       sp.name AS supplier_name,
       oi.item_name,
+      oi.item_id,
       oi.quantity,
       oi.unit,
       oi.note,
@@ -587,12 +602,12 @@ export function generateDailyListSnapshot(date: string) {
   const insertList = db.prepare("INSERT INTO daily_lists(date) VALUES (?)");
   const insertItem = db.prepare(`
     INSERT INTO daily_list_items (
-      daily_list_id, supplier_id, item_name, unit, total_quantity, source_count
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      daily_list_id, supplier_id, item_name, unit, total_quantity, source_count, item_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const updateItem = db.prepare(`
     UPDATE daily_list_items
-    SET total_quantity = ?, source_count = ?
+    SET total_quantity = ?, source_count = ?, item_id = COALESCE(?, item_id)
     WHERE id = ?
   `);
   const getList = db.prepare("SELECT id, receiving_locked_at FROM daily_lists WHERE date = ? LIMIT 1");
@@ -622,6 +637,7 @@ export function generateDailyListSnapshot(date: string) {
       unit: string;
       total: number;
       source_count: number;
+      item_id: number | null;
     }>();
 
     for (const order of orders) {
@@ -630,13 +646,15 @@ export function generateDailyListSnapshot(date: string) {
       if (existing) {
         existing.total += toNumber(order.quantity);
         existing.source_count += 1;
+        if (!existing.item_id && order.item_id) existing.item_id = order.item_id;
       } else {
         merged.set(key, {
           supplier_id: order.supplier_id,
           item_name: order.item_name,
           unit: order.unit,
           total: toNumber(order.quantity),
-          source_count: 1
+          source_count: 1,
+          item_id: order.item_id ?? null
         });
       }
     }
@@ -657,7 +675,7 @@ export function generateDailyListSnapshot(date: string) {
       const key = `${row.supplier_id}::${row.item_name}::${row.unit}`;
       const existingId = existingMap.get(key);
       if (existingId) {
-        updateItem.run(String(row.total), row.source_count, existingId);
+        updateItem.run(String(row.total), row.source_count, row.item_id, existingId);
       } else {
         insertItem.run(
           list.id,
@@ -665,7 +683,8 @@ export function generateDailyListSnapshot(date: string) {
           row.item_name,
           row.unit,
           String(row.total),
-          row.source_count
+          row.source_count,
+          row.item_id
         );
       }
     }
@@ -734,6 +753,13 @@ export function getDailyListItemsByDate(date: string): DailyListItem[] {
       dli.unit,
       dli.total_quantity,
       dli.source_count,
+      dli.item_id,
+      dli.is_extra,
+      ri.id AS receiving_item_id,
+      ri.received_quantity,
+      ri.rejected_quantity,
+      ri.reject_reason,
+      ri.received_by,
       ri.quality_ok,
       ri.unit_price,
       ri.input_unit_price,

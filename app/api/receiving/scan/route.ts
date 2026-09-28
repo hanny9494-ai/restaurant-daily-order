@@ -6,6 +6,7 @@ import { createReceivingScanFile, getSuppliers, getUnits, updateReceivingScanFil
 import { callQwenJson, resolveQwenModel } from "@/lib/qwen";
 import { receivingScanPrompt } from "@/lib/prompts";
 import { requirePermission } from "@/lib/permissions";
+import { ensureDataDir } from "@/lib/data-paths";
 
 export const dynamic = "force-dynamic";
 export const preferredRegion = "hkg1";
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest) {
       ? filename.slice(filename.lastIndexOf(".")).toLowerCase()
       : (mimeType.includes("png") ? ".png" : mimeType.includes("webp") ? ".webp" : ".jpg");
     const hash = crypto.createHash("sha256").update(bytes).digest("hex").slice(0, 20);
-    const saveDir = path.join(process.cwd(), "data", "uploads", "receiving-scans", date);
+    const saveDir = path.join(ensureDataDir(), "uploads", "receiving-scans", date);
     if (!fs.existsSync(saveDir)) {
       fs.mkdirSync(saveDir, { recursive: true });
     }

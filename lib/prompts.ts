@@ -82,3 +82,20 @@ export function buildFohCheckPrompt(input: {
 仅输出 JSON。
 `;
 }
+
+export const receivingInvoicePrompt = `
+你是餐厅后门收货的来货单（送货单/发票）识别助手。逐行识别图片中的商品明细，输出 JSON：
+{
+  "supplier_name": "供应商名称或null",
+  "date": "YYYY-MM-DD或null",
+  "items": [
+    { "name": "品名（保持原文）", "quantity": 数字, "unit": "单位（如 斤/千克/kg/个/箱/瓶/包）", "unit_price": 数字或null, "amount": 数字或null }
+  ],
+  "total": 单据合计金额数字或null
+}
+规则：
+1. quantity、unit_price、amount、total 必须是数字，不要带货币符号或单位。
+2. 看不清的字段填 null，不要编造；不要把合计行当成商品。
+3. 手写单据也尽量识别，品名保持原文不要改写。
+仅输出 JSON，不要输出其它文字。
+`;
